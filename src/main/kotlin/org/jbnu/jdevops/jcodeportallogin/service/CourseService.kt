@@ -116,6 +116,9 @@ class CourseService(
             year = courseDto.year,
             term = courseDto.term,
             vnc = courseDto.vnc,
+            hwCount = courseDto.hwCount,
+            pracEnabled = courseDto.pracEnabled,
+            pracCount = courseDto.pracCount,
             courseKey = encryptedKey
         ))
         return CourseDto(
@@ -127,6 +130,9 @@ class CourseService(
             year = course.year,
             term = course.term,
             vnc = course.vnc,
+            hwCount = course.hwCount,
+            pracEnabled = course.pracEnabled,
+            pracCount = course.pracCount,
             courseKey = rawKey
         )
     }
@@ -136,7 +142,17 @@ class CourseService(
     fun updateCourse(courseId: Long, courseDto: CourseDto): CourseDto {
         val course = courseRepository.findById(courseId)
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
-        val updatedCourse = course.copy(name = courseDto.name, code = courseDto.code, clss = courseDto.clss, year = courseDto.year, term = courseDto.term, professor = courseDto.professor)
+        val updatedCourse = course.copy(
+            name = courseDto.name,
+            code = courseDto.code,
+            clss = courseDto.clss,
+            year = courseDto.year,
+            term = courseDto.term,
+            professor = courseDto.professor,
+            hwCount = courseDto.hwCount,
+            pracEnabled = courseDto.pracEnabled,
+            pracCount = courseDto.pracCount
+        )
         courseRepository.save(updatedCourse)
         return CourseDto(
             courseId = updatedCourse.id,
@@ -146,7 +162,10 @@ class CourseService(
             clss = updatedCourse.clss,
             year = updatedCourse.year,
             term = updatedCourse.term,
-            vnc = updatedCourse.vnc
+            vnc = updatedCourse.vnc,
+            hwCount = updatedCourse.hwCount,
+            pracEnabled = updatedCourse.pracEnabled,
+            pracCount = updatedCourse.pracCount
         )
     }
 
@@ -172,7 +191,10 @@ class CourseService(
                     term = course.term,
                     year = course.year,
                     clss = course.clss,
-                    vnc = course.vnc
+                    vnc = course.vnc,
+                    hwCount = course.hwCount,
+                    pracEnabled = course.pracEnabled,
+                    pracCount = course.pracCount
                 )
             }
     }

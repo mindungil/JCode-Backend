@@ -22,6 +22,9 @@ data class CourseDto(
     val term: Int,
     val clss: Int,
     val vnc: Boolean,
+    val hwCount: Int = 10,
+    val pracEnabled: Boolean = false,
+    val pracCount: Int = 0,
 
     @field:NotBlank(message = "{course.key.required}")
     @field:Size(max = 100, message = "{course.key.size}")

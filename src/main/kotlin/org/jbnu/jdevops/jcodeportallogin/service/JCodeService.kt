@@ -71,7 +71,9 @@ class JCodeService(
             file_path = file_path,
             student_num = targetUser.studentNum.toString(),
             use_vnc = course.vnc,
-            use_snapshot = snapshot
+            use_snapshot = snapshot,
+            hw_count = course.hwCount,
+            prac_count = if (course.pracEnabled) course.pracCount else 0
         )
 
         // 외부 API 호출: JCode가 없으므로 쿠버네티스에 실제 JCode 생성 요청
