@@ -36,7 +36,7 @@ class CourseController(
         summary = "강의별 유저 조회",
         description = "특정 강의에 등록된 모든 사용자 정보를 조회합니다. (STUDENT 제외)"
     )
-    @PreAuthorize("hasAnyRole('ADMIN','PROFESSOR','ASSISTANT')")
+    @PreAuthorize("isAuthenticated()")
     @GetMapping("/{courseId}/users")
     fun getUsersByCourse(@PathVariable courseId: Long, authentication: Authentication): ResponseEntity<List<UserInfoDto>> {
         val email = authentication.principal as? String

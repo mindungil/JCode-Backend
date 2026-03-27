@@ -39,8 +39,8 @@ class CourseService(
         val currentUser = userRepository.findByEmail(email)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Current user not found")
 
-        // 만약 현재 사용자가 ASSISTANT라면 ASSISTANT 역할인 강의만 필터링
-        if (currentUser.role == RoleType.ASSISTANT) {
+        // STUDENT인 경우 해당 강의에서 조교 역할인지 확인
+        if (currentUser.role == RoleType.STUDENT) {
             val isAssistantInCourse = userCoursesRepository.existsByCourseIdAndUserIdAndRole(courseId, currentUser.id, RoleType.ASSISTANT)
             if (!isAssistantInCourse) {
                 return emptyList()
