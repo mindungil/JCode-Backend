@@ -226,6 +226,9 @@ class CourseService(
             courseYear = course.year,
             courseTerm = course.term,
             courseClss = course.clss,
+            hwCount = course.hwCount,
+            pracEnabled = course.pracEnabled,
+            pracCount = course.pracCount,
             assignments = assignments,
             jcodeUrl = null // 관리자는 JCode URL이 필요 없음
         )

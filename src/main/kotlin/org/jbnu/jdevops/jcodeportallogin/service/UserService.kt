@@ -178,6 +178,9 @@ class UserService(
                 courseClss = it.course.clss,
                 courseTerm = it.course.term,
                 courseYear = it.course.year,
+                hwCount = it.course.hwCount,
+                pracEnabled = it.course.pracEnabled,
+                pracCount = it.course.pracCount,
                 assignments = assignments.map { assignment ->
                     AssignmentDto(
                         assignmentId = assignment.id,

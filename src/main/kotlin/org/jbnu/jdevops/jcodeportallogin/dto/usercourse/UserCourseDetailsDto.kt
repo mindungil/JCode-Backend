@@ -24,6 +24,9 @@ data class UserCourseDetailsDto(
     val courseYear: Int,
     val courseTerm: Int,
     val courseClss: Int,
+    val hwCount: Int = 10,
+    val pracEnabled: Boolean = false,
+    val pracCount: Int = 0,
     val assignments: List<AssignmentDto>,
     val jcodeUrl: String?
 )
