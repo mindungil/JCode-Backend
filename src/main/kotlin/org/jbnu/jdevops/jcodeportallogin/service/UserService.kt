@@ -120,7 +120,8 @@ class UserService(
                 courseProfessor = it.course.professor,
                 courseClss = it.course.clss,
                 courseTerm = it.course.term,
-                courseYear = it.course.year
+                courseYear = it.course.year,
+                status = it.course.status
             )
         }
     }
@@ -142,7 +143,8 @@ class UserService(
                 courseProfessor = it.course.professor,
                 courseClss = it.course.clss,
                 courseTerm = it.course.term,
-                courseYear = it.course.year
+                courseYear = it.course.year,
+                status = it.course.status
             )
         }
     }
