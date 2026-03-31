@@ -182,6 +182,7 @@ class UserService(
                 hwCount = it.course.hwCount,
                 pracEnabled = it.course.pracEnabled,
                 pracCount = it.course.pracCount,
+                status = it.course.status,
                 courseRole = it.role,
                 assignments = assignments.map { assignment ->
                     AssignmentDto(

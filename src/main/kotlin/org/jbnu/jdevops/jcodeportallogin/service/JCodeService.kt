@@ -1,6 +1,7 @@
 package org.jbnu.jdevops.jcodeportallogin.service
 
 import org.jbnu.jdevops.jcodeportallogin.dto.jcode.*
+import org.jbnu.jdevops.jcodeportallogin.entity.CourseStatus
 import org.jbnu.jdevops.jcodeportallogin.entity.Jcode
 import org.jbnu.jdevops.jcodeportallogin.entity.RoleType
 import org.jbnu.jdevops.jcodeportallogin.repo.JCodeRepository
@@ -35,6 +36,11 @@ class JCodeService(
     fun createJCode(courseId: Long, userEmail: String, email: String, token: String, snapshot: Boolean): JCodeDto {
         val course = courseRepository.findById(courseId)
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
+
+        // 강의 상태 확인
+        if (course.status != CourseStatus.ACTIVE) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "종료된 강의에서는 JCode를 생성할 수 없습니다.")
+        }
 
         val user = userRepository.findByEmail(email)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")
