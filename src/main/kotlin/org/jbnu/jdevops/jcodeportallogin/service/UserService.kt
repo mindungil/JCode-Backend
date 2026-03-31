@@ -45,11 +45,12 @@ class UserService(
             // 비밀번호 해싱
             val hashedPassword = passwordEncoder.encode(registerUserDto.password)
 
-            // 새 사용자 저장
+            // 새 사용자 저장 (전역 ASSISTANT 역할은 허용하지 않음 — 수업별로만 관리)
+            val safeRole = if (registerUserDto.role == RoleType.ASSISTANT) RoleType.STUDENT else registerUserDto.role
             val user = userRepository.save(
                 User(
                     email = registerUserDto.email,
-                    role = registerUserDto.role,  // 기본적으로 학생 역할 부여
+                    role = safeRole,
                     studentNum = registerUserDto.studentNum
                 )
             )
@@ -181,6 +182,7 @@ class UserService(
                 hwCount = it.course.hwCount,
                 pracEnabled = it.course.pracEnabled,
                 pracCount = it.course.pracCount,
+                courseRole = it.role,
                 assignments = assignments.map { assignment ->
                     AssignmentDto(
                         assignmentId = assignment.id,
