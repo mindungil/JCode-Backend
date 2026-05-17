@@ -322,6 +322,11 @@ class UserService(
         val targetUser = userRepository.findById(userId)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "User not found with id: $userId")
 
+        // 전역 ASSISTANT 설정 차단: ASSISTANT는 수업별(courseId 필수)로만 부여 가능
+        if (newRole == RoleType.ASSISTANT && courseId == null) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "ASSISTANT 권한은 특정 강의에 대해서만 설정할 수 있습니다.")
+        }
+
         when (currentUser.role) {
             RoleType.ADMIN -> {}  // ADMIN은 모든 권한 설정 가능
             RoleType.PROFESSOR -> {
