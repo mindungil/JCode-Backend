@@ -26,13 +26,12 @@ class AssignmentService(
 
         when (user.role) {
             RoleType.ADMIN, RoleType.PROFESSOR -> return
-            RoleType.STUDENT -> {
+            RoleType.STUDENT, RoleType.ASSISTANT -> {
                 val isAssistant = userCoursesRepository.existsByCourseIdAndUserIdAndRole(courseId, user.id, RoleType.ASSISTANT)
                 if (!isAssistant) {
                     throw ResponseStatusException(HttpStatus.FORBIDDEN, "해당 강의의 과제 관리 권한이 없습니다.")
                 }
             }
-            else -> throw ResponseStatusException(HttpStatus.FORBIDDEN, "해당 권한이 없습니다.")
         }
     }
 
