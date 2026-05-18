@@ -19,10 +19,16 @@ class AssignmentController(
     // 과제 추가
     @Operation(summary = "과제 추가", description = "특정 강의에 새로운 과제를 추가합니다.")
     @PostMapping
-    fun createAssignment(@PathVariable courseId: Long, @RequestBody assignmentDto: AssignmentDto, authentication: Authentication): ResponseEntity<AssignmentDto> {
+    fun createAssignment(
+        @PathVariable courseId: Long,
+        @RequestBody assignmentDto: AssignmentDto,
+        @RequestHeader("Authorization") authorization: String,
+        authentication: Authentication
+    ): ResponseEntity<AssignmentDto> {
         val email = authentication.principal as? String
             ?: throw IllegalStateException("인증 정보를 찾을 수 없습니다.")
-        return ResponseEntity.ok(assignmentService.createAssignment(courseId, assignmentDto, email))
+        val token = authorization.removePrefix("Bearer").trim()
+        return ResponseEntity.ok(assignmentService.createAssignment(courseId, assignmentDto, email, token))
     }
 
     // 과제 수정

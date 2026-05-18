@@ -7,7 +7,10 @@ import org.jbnu.jdevops.jcodeportallogin.repo.AssignmentRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.CourseRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.UserRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.UserCoursesRepository
+import org.springframework.beans.factory.annotation.Qualifier
+import org.springframework.http.MediaType
 import org.springframework.stereotype.Service
+import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.server.ResponseStatusException
 import org.springframework.http.HttpStatus
 import org.springframework.transaction.annotation.Transactional
@@ -17,7 +20,9 @@ class AssignmentService(
     private val assignmentRepository: AssignmentRepository,
     private val courseRepository: CourseRepository,
     private val userRepository: UserRepository,
-    private val userCoursesRepository: UserCoursesRepository
+    private val userCoursesRepository: UserCoursesRepository,
+    @Qualifier("generatorWebClient")
+    private val generatorWebClient: WebClient
 ) {
 
     private fun validateAssignmentAuthority(courseId: Long, email: String) {
@@ -35,9 +40,33 @@ class AssignmentService(
         }
     }
 
+    private fun toDirName(name: String): String {
+        return name.trim()
+            .replace(Regex("[/\\\\:*?\"<>|]"), "")
+            .take(80)
+    }
+
+    private fun provisionAssignmentDirectory(courseCode: String, clss: Int, dirName: String, token: String) {
+        try {
+            generatorWebClient.post()
+                .uri("/api/workspace/provision")
+                .header("Authorization", "Bearer $token")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(mapOf(
+                    "namespace" to "jcode-${courseCode.lowercase()}-$clss",
+                    "dir_name" to dirName
+                ))
+                .retrieve()
+                .bodyToMono(Map::class.java)
+                .block()
+        } catch (ex: Exception) {
+            println("Warning: Failed to provision workspace directory: ${ex.message}")
+        }
+    }
+
     // 과제 추가
     @Transactional
-    fun createAssignment(courseId: Long, assignmentDto: AssignmentDto, email: String): AssignmentDto {
+    fun createAssignment(courseId: Long, assignmentDto: AssignmentDto, email: String, token: String): AssignmentDto {
         validateAssignmentAuthority(courseId, email)
 
         val course = courseRepository.findById(courseId)
@@ -47,16 +76,31 @@ class AssignmentService(
             throw ResponseStatusException(HttpStatus.CONFLICT, "Assignment already exists")
         }
 
+        val dirName = toDirName(assignmentDto.assignmentName)
+        if (dirName.isBlank()) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "유효한 과제명을 입력해주세요.")
+        }
+
+        if (assignmentRepository.existsByCourseIdAndDirName(course.id, dirName)) {
+            throw ResponseStatusException(HttpStatus.CONFLICT, "동일한 디렉토리명의 과제가 이미 존재합니다.")
+        }
+
         val assignment = assignmentRepository.save(Assignment(
             name = assignmentDto.assignmentName,
             description = assignmentDto.assignmentDescription,
+            dirName = dirName,
             kickoffDate = assignmentDto.kickoffDate,
             deadlineDate = assignmentDto.deadlineDate,
             course = course))
+
+        provisionAssignmentDirectory(course.code, course.clss, dirName, token)
+
         return AssignmentDto(
             assignmentId = assignment.id,
             assignmentName = assignment.name,
             assignmentDescription = assignment.description,
+            dirName = assignment.dirName,
+            hasStarterCode = assignment.hasStarterCode,
             kickoffDate = assignment.kickoffDate,
             deadlineDate = assignment.deadlineDate,
             createdAt = assignment.createdAt.toString(),
@@ -74,7 +118,7 @@ class AssignmentService(
         val assignment = assignmentRepository.findById(assignmentId)
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Assignment not found") }
 
-        // 수정된 데이터 저장
+        // dirName은 변경하지 않음 (디렉토리명 불변)
         val updatedAssignment = assignment.copy(
             name = assignmentDto.assignmentName,
             description = assignmentDto.assignmentDescription,
@@ -88,6 +132,8 @@ class AssignmentService(
             assignmentId = assignment.id,
             assignmentName = updatedAssignment.name,
             assignmentDescription = updatedAssignment.description,
+            dirName = updatedAssignment.dirName,
+            hasStarterCode = updatedAssignment.hasStarterCode,
             kickoffDate = updatedAssignment.kickoffDate,
             deadlineDate = updatedAssignment.deadlineDate,
             createdAt = updatedAssignment.createdAt.toString(),
