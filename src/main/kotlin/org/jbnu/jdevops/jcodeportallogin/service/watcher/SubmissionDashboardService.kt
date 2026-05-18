@@ -59,12 +59,12 @@ class SubmissionDashboardService(
 
         val summaries = studentCourses.mapNotNull { uc ->
             val student = uc.user
+            val sNum = student.studentNum ?: return@mapNotNull null
             try {
-                buildStudentSummary(classDiv, assignment.name, student.studentNum, student.name)
+                buildStudentSummary(classDiv, assignment.name, sNum, student.name)
             } catch (ex: Exception) {
-                // 데이터 없는 학생은 빈 요약으로
                 StudentSubmissionSummary(
-                    studentNum = student.studentNum,
+                    studentNum = sNum,
                     studentName = student.name,
                     buildCount = 0,
                     buildFailCount = 0,

@@ -162,8 +162,8 @@ class AssignmentService(
                     org.springframework.util.LinkedMultiValueMap<String, Any>().apply {
                         add("namespace", "jcode-${course.code.lowercase()}-${course.clss}")
                         add("dir_name", assignment.dirName)
-                        add("file", org.springframework.core.io.ByteArrayResource(file.bytes) {
-                            override fun getFilename() = file.originalFilename ?: "starter.zip"
+                        add("file", object : org.springframework.core.io.ByteArrayResource(file.bytes) {
+                            override fun getFilename(): String = file.originalFilename ?: "starter.zip"
                         })
                     }
                 )
