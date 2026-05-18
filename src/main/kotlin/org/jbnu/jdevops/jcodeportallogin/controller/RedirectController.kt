@@ -5,6 +5,7 @@ import io.swagger.v3.oas.annotations.tags.Tag
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import org.jbnu.jdevops.jcodeportallogin.dto.jcode.RedirectDto
+import org.jbnu.jdevops.jcodeportallogin.repo.AssignmentRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.CourseRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.JCodeRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.UserRepository
@@ -26,7 +27,8 @@ class RedirectController(
     private val redisService: RedisService,
     private val jCodeRepository: JCodeRepository,
     private val userRepository: UserRepository,
-    private val courseRepository: CourseRepository
+    private val courseRepository: CourseRepository,
+    private val assignmentRepository: AssignmentRepository
 ) {
 
     @Value("\${router.url}")  // 환경 변수에서 Node.js URL 가져오기
@@ -64,8 +66,18 @@ class RedirectController(
             else redisService.storeUserCourse(user.email, course.code, course.clss, storedJcode.jcodeUrl)
         }
 
+        // 과제별 폴더 경로 결정
+        val folderPath = if (redirectRequest.assignmentId != null) {
+            val assignment = assignmentRepository.findById(redirectRequest.assignmentId)
+                .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Assignment not found") }
+            "/home/coder/project/${assignment.dirName}"
+        } else {
+            "/home/coder/project"
+        }
+
         // Node.js 서버 URL에 인코딩된 UUID 파라미터만 포함하여 구성
-        val finalNodeJsUrl = "$routerUrl?id=$encodedUUID&folder=/home/coder/project"
+        val encodedFolder = URLEncoder.encode(folderPath, StandardCharsets.UTF_8.toString())
+        val finalNodeJsUrl = "$routerUrl?id=$encodedUUID&folder=$encodedFolder"
         println("Redirect URL: $finalNodeJsUrl")
 
         // Keycloak Access Token을 HTTP-Only Secure 쿠키로 설정

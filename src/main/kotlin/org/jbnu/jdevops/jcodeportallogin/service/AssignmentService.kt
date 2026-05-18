@@ -141,6 +141,43 @@ class AssignmentService(
         )
     }
 
+    // 스타터 코드 업로드
+    @Transactional
+    fun uploadStarterCode(courseId: Long, assignmentId: Long, file: org.springframework.web.multipart.MultipartFile, email: String, token: String) {
+        validateAssignmentAuthority(courseId, email)
+
+        val course = courseRepository.findById(courseId)
+            .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
+
+        val assignment = assignmentRepository.findById(assignmentId)
+            .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Assignment not found") }
+
+        // Generator에 스타터 코드 배포 요청
+        try {
+            generatorWebClient.post()
+                .uri("/api/workspace/starter-code")
+                .header("Authorization", "Bearer $token")
+                .contentType(org.springframework.http.MediaType.MULTIPART_FORM_DATA)
+                .bodyValue(
+                    org.springframework.util.LinkedMultiValueMap<String, Any>().apply {
+                        add("namespace", "jcode-${course.code.lowercase()}-${course.clss}")
+                        add("dir_name", assignment.dirName)
+                        add("file", org.springframework.core.io.ByteArrayResource(file.bytes) {
+                            override fun getFilename() = file.originalFilename ?: "starter.zip"
+                        })
+                    }
+                )
+                .retrieve()
+                .bodyToMono(Map::class.java)
+                .block()
+        } catch (ex: Exception) {
+            throw ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "스타터 코드 배포 실패: ${ex.message}")
+        }
+
+        // hasStarterCode 플래그 업데이트
+        assignmentRepository.save(assignment.copy(hasStarterCode = true))
+    }
+
     // 과제 삭제
     @Transactional
     fun deleteAssignment(courseId: Long, assignmentId: Long, email: String) {
