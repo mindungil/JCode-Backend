@@ -408,8 +408,11 @@ class UserService(
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
 
         if (currentUser.role != RoleType.ADMIN) {
-            val currentUserCourse = userCoursesRepository.findByUserIdAndCourseId(user.id, course.id)
-                ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "이 강의에 대한 권한이 없습니다.")
+            val currentUserCourse = userCoursesRepository.findByUserIdAndCourseId(currentUser.id, course.id)
+                ?: throw ResponseStatusException(HttpStatus.FORBIDDEN, "이 강의에 대한 권한이 없습니다.")
+            if (currentUserCourse.role != RoleType.PROFESSOR) {
+                throw ResponseStatusException(HttpStatus.FORBIDDEN, "이 강의의 담당 교수 권한이 없습니다.")
+            }
         }
 
         val userCourse = userCoursesRepository.findByUserIdAndCourseId(user.id, course.id)
