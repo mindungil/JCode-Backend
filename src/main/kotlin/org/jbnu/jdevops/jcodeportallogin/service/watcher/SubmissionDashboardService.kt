@@ -61,7 +61,7 @@ class SubmissionDashboardService(
             val student = uc.user
             val sNum = student.studentNum ?: return@mapNotNull null
             try {
-                buildStudentSummary(classDiv, assignment.name, sNum, student.name)
+                buildStudentSummary(classDiv, assignment.watcherHwName(), sNum, student.name)
             } catch (ex: Exception) {
                 StudentSubmissionSummary(
                     studentNum = sNum,
