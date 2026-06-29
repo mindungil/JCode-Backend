@@ -191,6 +191,8 @@ class UserService(
                         assignmentId = assignment.id,
                         assignmentName = assignment.name,
                         assignmentDescription = assignment.description,
+                        dirName = assignment.dirName,
+                        hasStarterCode = assignment.hasStarterCode,
                         kickoffDate = assignment.kickoffDate,
                         deadlineDate = assignment.deadlineDate,
                         createdAt = assignment.createdAt.toString(),
