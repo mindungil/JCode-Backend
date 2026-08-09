@@ -31,21 +31,19 @@ class SubmissionDashboardService(
         val user = userRepository.findByEmail(email)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")
 
-        // 권한 검증: ADMIN, PROFESSOR, 또는 해당 과목 ASSISTANT만 접근 가능
-        when (user.role) {
-            RoleType.ADMIN, RoleType.PROFESSOR -> { /* OK */ }
-            else -> {
-                val isAssistant = userCoursesRepository.existsByCourseIdAndUserIdAndRole(courseId, user.id, RoleType.ASSISTANT)
-                if (!isAssistant) {
-                    throw ResponseStatusException(HttpStatus.FORBIDDEN, "대시보드 접근 권한이 없습니다.")
-                }
+        // 전역 역할이 아니라 해당 강의에서의 역할로 권한을 판단한다.
+        if (user.role != RoleType.ADMIN) {
+            val membership = userCoursesRepository.findByUserIdAndCourseId(user.id, courseId)
+                ?: throw ResponseStatusException(HttpStatus.FORBIDDEN, "해당 강의에 소속되어 있지 않습니다.")
+            if (membership.role !in setOf(RoleType.PROFESSOR, RoleType.ASSISTANT)) {
+                throw ResponseStatusException(HttpStatus.FORBIDDEN, "대시보드 접근 권한이 없습니다.")
             }
         }
 
         val course = courseRepository.findById(courseId)
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
 
-        val assignment = assignmentRepository.findById(assignmentId)
+        val assignment = assignmentRepository.findByIdAndCourseId(assignmentId, courseId)
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Assignment not found") }
 
         if (assignment.course.id != course.id) {

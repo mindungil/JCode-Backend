@@ -14,10 +14,10 @@ import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.http.HttpMethod
 import org.springframework.stereotype.Service
 import org.springframework.web.reactive.function.client.WebClient
+import org.springframework.web.reactive.function.client.WebClientResponseException
 import org.springframework.web.server.ResponseStatusException
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
-import org.springframework.scheduling.annotation.Async
 import org.springframework.transaction.annotation.Transactional
 
 @Service
@@ -33,7 +33,6 @@ class JCodeService(
     // JCode 생성
     // transactional을 통해 master db에서 작업하도록 명시
     // 하지만 trasaction 처리가 오래걸려 성능 저하를 유발 할 수 있어 비동기적으로 처리
-    @Async
     @Transactional
     fun createJCode(courseId: Long, userEmail: String, email: String, token: String, snapshot: Boolean): JCodeDto {
         val course = courseRepository.findById(courseId)
@@ -41,7 +40,7 @@ class JCodeService(
 
         // 강의 상태 확인
         if (course.status != CourseStatus.ACTIVE) {
-            throw ResponseStatusException(HttpStatus.FORBIDDEN, "종료된 강의에서는 JCode를 생성할 수 없습니다.")
+            throw ResponseStatusException(HttpStatus.CONFLICT, "종료된 강의에서는 JCode를 생성할 수 없습니다.")
         }
 
         val user = userRepository.findByEmail(email)
@@ -125,7 +124,6 @@ class JCodeService(
     // JCode 삭제 (관리자 전용)
     // transactional을 통해 master db에서 작업하도록 명시
     // 하지만 trasaction 처리가 오래걸려 성능 저하를 유발 할 수 있어 비동기적으로 처리
-    @Async
     @Transactional
     fun deleteJCode(userEmail: String, courseId: Long, token: String, snapshot: Boolean) {
         val user = userRepository.findByEmail(userEmail)
@@ -136,37 +134,43 @@ class JCodeService(
         val jCode = jCodeRepository.findByUserIdAndCourseIdAndSnapshot(user.id, course.id, snapshot)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "JCode not found for the specified user and course")
 
-        // snapshot 확인
-        var deployment_name = "jcode-${course.code.lowercase()}-${course.clss}-${user.studentNum}"
-        if (snapshot) {
-            deployment_name = "jcode-snapshot-${course.code.lowercase()}-${user.studentNum}"
-        }
+        deleteExternalJCode(jCode, token)
+        jCodeRepository.delete(jCode)
+    }
 
-        val jcodeRequestBody = JCodeDeleteRequestDto (
+    @Transactional
+    fun deleteAllJCodesForUserCourse(userCourse: org.jbnu.jdevops.jcodeportallogin.entity.UserCourses, token: String) {
+        jCodeRepository.findAllByUserCourse(userCourse).forEach { jCode ->
+            deleteExternalJCode(jCode, token)
+            jCodeRepository.delete(jCode)
+        }
+    }
+
+    private fun deleteExternalJCode(jCode: Jcode, token: String) {
+        val course = jCode.course
+        val user = jCode.user
+        val deploymentName = if (jCode.snapshot) {
+            "jcode-snapshot-${course.code.lowercase()}-${user.studentNum}"
+        } else {
+            "jcode-${course.code.lowercase()}-${course.clss}-${user.studentNum}"
+        }
+        val request = JCodeDeleteRequestDto(
             namespace = "jcode-${course.code.lowercase()}-${course.clss}",
-            deployment_name = deployment_name,
-            service_name = deployment_name + "-svc"
+            deployment_name = deploymentName,
+            service_name = "$deploymentName-svc"
         )
 
-        // 외부 API 호출: 쿠버네티스에 실제 JCode 삭제 요청
-        val externalJcodeDto: JCodeDeleteResponseDto? = try {
+        try {
             webClient.method(HttpMethod.DELETE)
                 .uri("/api/jcode")
                 .header("Authorization", "Bearer $token")
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(jcodeRequestBody)
+                .bodyValue(request)
                 .retrieve()
                 .bodyToMono(JCodeDeleteResponseDto::class.java)
                 .block()
-        } catch (ex: Exception) {
-            println("Error calling external API: ${ex.message}")
-            null
+        } catch (_: WebClientResponseException.NotFound) {
+            // Idempotent delete: the Kubernetes resource is already absent.
         }
-
-        if (externalJcodeDto == null) {
-            throw ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to delete Jcode externally")
-        }
-
-        jCodeRepository.delete(jCode)
     }
 }

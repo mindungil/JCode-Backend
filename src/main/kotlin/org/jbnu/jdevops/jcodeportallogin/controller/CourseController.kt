@@ -64,8 +64,10 @@ class CourseController(
     @Operation(summary = "강의 key 재발급", description = "특정 강의의 key를 재발급합니다. (ADMIN, PROFESSOR 전용)")
     @PreAuthorize("hasAnyRole('ADMIN', 'PROFESSOR')")
     @GetMapping("/{courseId}/key")
-    fun reissueCourseKey(@PathVariable courseId: Long): ResponseEntity<String> {
-        val newKey = courseService.reissueCourseKey(courseId)
+    fun reissueCourseKey(@PathVariable courseId: Long, authentication: Authentication): ResponseEntity<String> {
+        val email = authentication.principal as? String
+            ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Missing email in authentication")
+        val newKey = courseService.reissueCourseKey(courseId, email)
         return ResponseEntity.ok(newKey)
     }
 
@@ -75,6 +77,7 @@ class CourseController(
     @PostMapping
     fun createCourse(@RequestBody courseDto: CourseDto, request: HttpServletRequest): ResponseEntity<CourseDto> {
         val token = extractToken(request)
+            ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authorization token is required")
         return ResponseEntity.ok(courseService.createCourse(courseDto, token))
     }
 
@@ -82,8 +85,10 @@ class CourseController(
     @Operation(summary = "강의 수정", description = "특정 강의의 정보를 수정합니다. (ADMIN, PROFESSOR 전용)")
     @PreAuthorize("hasAnyRole('ADMIN', 'PROFESSOR')")
     @PutMapping("/{courseId}")
-    fun updateCourse(@PathVariable courseId: Long, @RequestBody courseDto: CourseDto): ResponseEntity<CourseDto> {
-        return ResponseEntity.ok(courseService.updateCourse(courseId, courseDto))
+    fun updateCourse(@PathVariable courseId: Long, @RequestBody courseDto: CourseDto, authentication: Authentication): ResponseEntity<CourseDto> {
+        val email = authentication.principal as? String
+            ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Missing email in authentication")
+        return ResponseEntity.ok(courseService.updateCourse(courseId, courseDto, email))
     }
 
     // 강의 삭제 (ADMIN 전용)
@@ -92,6 +97,7 @@ class CourseController(
     @DeleteMapping("/{courseId}")
     fun deleteCourse(@PathVariable courseId: Long, request: HttpServletRequest): ResponseEntity<String> {
         val token = extractToken(request)
+            ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authorization token is required")
         courseService.deleteCourse(courseId, token)
         return ResponseEntity.ok("Course deleted successfully")
     }

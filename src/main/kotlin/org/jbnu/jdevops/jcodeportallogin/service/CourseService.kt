@@ -16,6 +16,7 @@ import org.jbnu.jdevops.jcodeportallogin.util.CourseKeyUtil
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Service
 import org.springframework.web.reactive.function.client.WebClient
+import org.springframework.web.reactive.function.client.WebClientResponseException
 import org.springframework.web.server.ResponseStatusException
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
@@ -39,6 +40,31 @@ class CourseService(
     private fun getCourseNamespace(course: Course): String {
         return "jcode-${course.code.lowercase()}-${course.clss}"
     }
+
+    private fun deleteGeneratorResource(uri: String, token: String) {
+        try {
+            generatorWebClient.delete()
+                .uri(uri)
+                .header("Authorization", "Bearer $token")
+                .retrieve()
+                .bodyToMono(Map::class.java)
+                .block()
+        } catch (_: WebClientResponseException.NotFound) {
+            // DELETE is idempotent: an already-absent Kubernetes resource is success.
+        }
+    }
+
+    private fun validateCourseManagementAuthority(courseId: Long, email: String) {
+        val user = userRepository.findByEmail(email)
+            ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Current user not found")
+        if (user.role == RoleType.ADMIN) {
+            return
+        }
+        val membership = userCoursesRepository.findByUserIdAndCourseId(user.id, courseId)
+        if (membership?.role != RoleType.PROFESSOR) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "해당 강의의 담당 교수 권한이 없습니다.")
+        }
+    }
     // 강의별 유저 조회
     @Transactional(readOnly = true)
     fun getUsersByCourse(email: String, courseId: Long): List<UserInfoDto> {
@@ -52,11 +78,10 @@ class CourseService(
         val currentUser = userRepository.findByEmail(email)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Current user not found")
 
-        // STUDENT인 경우 해당 강의에서 조교 역할인지 확인
-        if (currentUser.role == RoleType.STUDENT) {
-            val isAssistantInCourse = userCoursesRepository.existsByCourseIdAndUserIdAndRole(courseId, currentUser.id, RoleType.ASSISTANT)
-            if (!isAssistantInCourse) {
-                return emptyList()
+        if (currentUser.role != RoleType.ADMIN) {
+            val membership = userCoursesRepository.findByUserIdAndCourseId(currentUser.id, courseId)
+            if (membership?.role !in setOf(RoleType.PROFESSOR, RoleType.ASSISTANT)) {
+                throw ResponseStatusException(HttpStatus.FORBIDDEN, "해당 강의의 사용자 조회 권한이 없습니다.")
             }
         }
 
@@ -100,7 +125,8 @@ class CourseService(
 
     // 강의 key 재발급
     @Transactional
-    fun reissueCourseKey(courseId: Long): String {
+    fun reissueCourseKey(courseId: Long, email: String): String {
+        validateCourseManagementAuthority(courseId, email)
         val course = courseRepository.findById(courseId)
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
 
@@ -117,7 +143,7 @@ class CourseService(
 
     // 강의 추가 (DB 저장 + Generator에 NS 초기화 요청)
     @Transactional
-    fun createCourse(courseDto: CourseDto, token: String? = null): CourseDto {
+    fun createCourse(courseDto: CourseDto, token: String): CourseDto {
         // 랜덤 key를 생성하여 할당
         val rawKey = courseKeyUtil.generateCourseEnrollmentCode(courseDto.code, courseDto.clss)
         // PasswordEncoder를 사용해 암호화 (해싱) 처리
@@ -137,23 +163,16 @@ class CourseService(
             courseKey = encryptedKey
         ))
 
-        // Generator에 NS 초기화 요청 (실패해도 강의 생성은 유지 — JCode 배포 시 자동 생성 fallback 있음)
-        if (token != null) {
-            try {
-                val namespace = getCourseNamespace(course)
-                generatorWebClient.post()
-                    .uri("/api/namespace")
-                    .header("Authorization", "Bearer $token")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .bodyValue(mapOf("namespace" to namespace))
-                    .retrieve()
-                    .bodyToMono(Map::class.java)
-                    .block()
-            } catch (ex: Exception) {
-                // NS 생성 실패는 치명적이지 않음 — JCode 배포 시 자동 생성됨
-                println("Warning: NS 초기화 실패 (JCode 배포 시 자동 생성됩니다): ${ex.message}")
-            }
-        }
+        // DB와 Kubernetes가 성공 상태로 어긋나지 않도록 실패를 전파한다.
+        val namespace = getCourseNamespace(course)
+        generatorWebClient.post()
+            .uri("/api/namespace")
+            .header("Authorization", "Bearer $token")
+            .contentType(MediaType.APPLICATION_JSON)
+            .bodyValue(mapOf("namespace" to namespace, "use_vnc" to course.vnc))
+            .retrieve()
+            .bodyToMono(Map::class.java)
+            .block()
 
         return CourseDto(
             courseId = course.id,
@@ -174,13 +193,20 @@ class CourseService(
 
     // 강의 수정
     @Transactional
-    fun updateCourse(courseId: Long, courseDto: CourseDto): CourseDto {
+    fun updateCourse(courseId: Long, courseDto: CourseDto, email: String): CourseDto {
+        validateCourseManagementAuthority(courseId, email)
         val course = courseRepository.findById(courseId)
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
+
+        if (course.code != courseDto.code || course.clss != courseDto.clss || course.vnc != courseDto.vnc) {
+            throw ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "강의 code, clss, vnc는 인프라 식별자이므로 생성 후 변경할 수 없습니다."
+            )
+        }
+
         val updatedCourse = course.copy(
             name = courseDto.name,
-            code = courseDto.code,
-            clss = courseDto.clss,
             year = courseDto.year,
             term = courseDto.term,
             professor = courseDto.professor,
@@ -207,23 +233,14 @@ class CourseService(
     }
 
     @Transactional
-    fun deleteCourse(courseId: Long, token: String? = null) {
+    fun deleteCourse(courseId: Long, token: String) {
         val course = courseRepository.findById(courseId)
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
 
         // ARCHIVED 상태가 아니면 NS도 삭제
-        if (course.status != CourseStatus.ARCHIVED && token != null) {
-            try {
-                val namespace = getCourseNamespace(course)
-                generatorWebClient.delete()
-                    .uri("/api/namespace/$namespace")
-                    .header("Authorization", "Bearer $token")
-                    .retrieve()
-                    .bodyToMono(Map::class.java)
-                    .block()
-            } catch (ex: Exception) {
-                println("Warning: NS 삭제 실패: ${ex.message}")
-            }
+        if (course.status != CourseStatus.ARCHIVED) {
+            val namespace = getCourseNamespace(course)
+            deleteGeneratorResource("/api/namespace/$namespace", token)
         }
 
         // 강의 삭제
@@ -241,17 +258,8 @@ class CourseService(
         }
 
         // Generator에 NS 내 전체 리소스 삭제 요청 (NS는 유지)
-        try {
-            val namespace = getCourseNamespace(course)
-            generatorWebClient.delete()
-                .uri("/api/namespace/$namespace/resources")
-                .header("Authorization", "Bearer $token")
-                .retrieve()
-                .bodyToMono(Map::class.java)
-                .block()
-        } catch (ex: Exception) {
-            println("Warning: NS 리소스 삭제 실패: ${ex.message}")
-        }
+        val namespace = getCourseNamespace(course)
+        deleteGeneratorResource("/api/namespace/$namespace/resources", token)
 
         // jcode 테이블에서 해당 course의 모든 레코드 삭제
         val jcodes = jCodeRepository.findByCourseId(courseId)
@@ -274,17 +282,8 @@ class CourseService(
         }
 
         // Generator에 NS 삭제 요청
-        try {
-            val namespace = getCourseNamespace(course)
-            generatorWebClient.delete()
-                .uri("/api/namespace/$namespace")
-                .header("Authorization", "Bearer $token")
-                .retrieve()
-                .bodyToMono(Map::class.java)
-                .block()
-        } catch (ex: Exception) {
-            println("Warning: NS 삭제 실패: ${ex.message}")
-        }
+        val namespace = getCourseNamespace(course)
+        deleteGeneratorResource("/api/namespace/$namespace", token)
 
         course.status = CourseStatus.ARCHIVED
         courseRepository.save(course)
@@ -307,7 +306,7 @@ class CourseService(
                 .uri("/api/namespace")
                 .header("Authorization", "Bearer $token")
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(mapOf("namespace" to namespace))
+                .bodyValue(mapOf("namespace" to namespace, "use_vnc" to course.vnc))
                 .retrieve()
                 .bodyToMono(Map::class.java)
                 .block()
