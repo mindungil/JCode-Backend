@@ -73,7 +73,7 @@ class CourseController(
     fun createCourse(@RequestBody courseDto: CourseDto, authentication: Authentication): ResponseEntity<CourseDto> {
         val email = authentication.principal as? String
             ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Missing email in authentication")
-        return ResponseEntity.ok(courseService.createCourse(courseDto, email))
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(courseService.createCourse(courseDto, email))
     }
 
     // 강의 수정 (ADMIN, PROFESSOR 전용)
@@ -101,7 +101,7 @@ class CourseController(
     @PutMapping("/{courseId}/end")
     fun endCourse(@PathVariable courseId: Long): ResponseEntity<String> {
         courseService.endCourse(courseId)
-        return ResponseEntity.ok("Course ended successfully")
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body("Course termination requested")
     }
 
     // 강의 아카이브 (ADMIN 전용)
@@ -110,7 +110,7 @@ class CourseController(
     @PutMapping("/{courseId}/archive")
     fun archiveCourse(@PathVariable courseId: Long): ResponseEntity<String> {
         courseService.archiveCourse(courseId)
-        return ResponseEntity.ok("Course archived successfully")
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body("Course archive requested")
     }
 
     // 강의 재개설 (ADMIN 전용)
@@ -119,7 +119,15 @@ class CourseController(
     @PutMapping("/{courseId}/reopen")
     fun reopenCourse(@PathVariable courseId: Long): ResponseEntity<String> {
         courseService.reopenCourse(courseId)
-        return ResponseEntity.ok("Course reopened successfully")
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body("Course reopen requested")
+    }
+
+    @Operation(summary = "강의 인프라 재시도", description = "실패한 강의 인프라 작업을 다시 요청합니다. (ADMIN 전용)")
+    @PreAuthorize("hasRole('ADMIN')")
+    @PostMapping("/{courseId}/infrastructure/retry")
+    fun retryInfrastructure(@PathVariable courseId: Long): ResponseEntity<String> {
+        courseService.retryInfrastructure(courseId)
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body("Course infrastructure retry requested")
     }
 
     // 강의 상세 정보 조회

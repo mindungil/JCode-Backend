@@ -6,57 +6,30 @@ import org.jbnu.jdevops.jcodeportallogin.dto.usercourse.UserCourseDetailsDto
 import org.jbnu.jdevops.jcodeportallogin.dto.user.UserInfoDto
 import org.jbnu.jdevops.jcodeportallogin.entity.Course
 import org.jbnu.jdevops.jcodeportallogin.entity.CourseStatus
+import org.jbnu.jdevops.jcodeportallogin.entity.CourseInfrastructureAction
 import org.jbnu.jdevops.jcodeportallogin.entity.RoleType
 import org.jbnu.jdevops.jcodeportallogin.entity.UserCourses
-import org.jbnu.jdevops.jcodeportallogin.config.GENERATOR_SCOPE_ATTRIBUTE
 import org.jbnu.jdevops.jcodeportallogin.repo.AssignmentRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.CourseRepository
-import org.jbnu.jdevops.jcodeportallogin.repo.JCodeRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.UserCoursesRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.UserRepository
 import org.jbnu.jdevops.jcodeportallogin.util.CourseKeyUtil
-import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Service
-import org.springframework.web.reactive.function.client.WebClient
-import org.springframework.web.reactive.function.client.WebClientResponseException
 import org.springframework.web.server.ResponseStatusException
 import org.springframework.http.HttpStatus
-import org.springframework.http.MediaType
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.transaction.annotation.Transactional
-import java.time.LocalDateTime
 
 @Service
 class CourseService(
     private val userCoursesRepository: UserCoursesRepository,
     private val assignmentRepository: AssignmentRepository,
     private val courseRepository: CourseRepository,
-    private val jCodeRepository: JCodeRepository,
     private val courseKeyUtil: CourseKeyUtil,
     private val passwordEncoder: PasswordEncoder,
     private val userRepository: UserRepository,
-    @Qualifier("generatorBootstrapWebClient")
-    private val generatorBootstrapWebClient: WebClient,
-    @Qualifier("generatorWorkspaceWebClient")
-    private val generatorWorkspaceWebClient: WebClient
+    private val infrastructureOperationStore: CourseInfrastructureOperationStore
 ) {
-
-    private fun getCourseNamespace(course: Course): String {
-        return "jcode-${course.code.lowercase()}-${course.clss}"
-    }
-
-    private fun deleteGeneratorResource(client: WebClient, uri: String, scope: String) {
-        try {
-            client.delete()
-                .uri(uri)
-                .attribute(GENERATOR_SCOPE_ATTRIBUTE, scope)
-                .retrieve()
-                .bodyToMono(Map::class.java)
-                .block()
-        } catch (_: WebClientResponseException.NotFound) {
-            // DELETE is idempotent: an already-absent Kubernetes resource is success.
-        }
-    }
 
     private fun validateCourseManagementAuthority(courseId: Long, email: String) {
         val user = userRepository.findByEmail(email)
@@ -164,7 +137,8 @@ class CourseService(
             hwCount = courseDto.hwCount,
             pracEnabled = courseDto.pracEnabled,
             pracCount = courseDto.pracCount,
-            courseKey = encryptedKey
+            courseKey = encryptedKey,
+            status = CourseStatus.PROVISIONING
         ))
 
         val creator = userRepository.findByEmail(creatorEmail)
@@ -173,16 +147,7 @@ class CourseService(
             UserCourses(course = course, user = creator, role = RoleType.PROFESSOR)
         )
 
-        // DB와 Kubernetes가 성공 상태로 어긋나지 않도록 실패를 전파한다.
-        val namespace = getCourseNamespace(course)
-        generatorBootstrapWebClient.post()
-            .uri("/api/namespace")
-            .attribute(GENERATOR_SCOPE_ATTRIBUTE, "namespace:write")
-            .contentType(MediaType.APPLICATION_JSON)
-            .bodyValue(mapOf("course_id" to course.id, "namespace" to namespace, "use_vnc" to course.vnc))
-            .retrieve()
-            .bodyToMono(Map::class.java)
-            .block()
+        infrastructureOperationStore.enqueue(course.id, CourseInfrastructureAction.PROVISION_NAMESPACE)
 
         return CourseDto(
             courseId = course.id,
@@ -247,13 +212,10 @@ class CourseService(
         val course = courseRepository.findById(courseId)
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
 
-        // ARCHIVED 상태가 아니면 NS도 삭제
         if (course.status != CourseStatus.ARCHIVED) {
-            val namespace = getCourseNamespace(course)
-            deleteGeneratorResource(
-                generatorBootstrapWebClient,
-                "/api/namespace/$namespace?course_id=${course.id}",
-                "namespace:delete"
+            throw ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "강의 Namespace 아카이브가 완료된 뒤에만 강의를 삭제할 수 있습니다."
             )
         }
 
@@ -261,7 +223,7 @@ class CourseService(
         courseRepository.delete(course)
     }
 
-    // 강의 종료: status → ENDED, pod 전체 삭제, jcode 레코드 삭제
+    // 강의 종료 요청: DB에 desired state와 작업을 기록하고 reconciler가 완료한다.
     @Transactional
     fun endCourse(courseId: Long) {
         val course = courseRepository.findById(courseId)
@@ -271,22 +233,9 @@ class CourseService(
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "ACTIVE 상태의 강의만 종료할 수 있습니다.")
         }
 
-        // Generator에 NS 내 전체 리소스 삭제 요청 (NS는 유지)
-        val namespace = getCourseNamespace(course)
-        deleteGeneratorResource(
-            generatorWorkspaceWebClient,
-            "/api/namespace/$namespace/resources?course_id=${course.id}",
-            "namespace:resources:delete"
-        )
-
-        // jcode 테이블에서 해당 course의 모든 레코드 삭제
-        val jcodes = jCodeRepository.findByCourseId(courseId)
-        jCodeRepository.deleteAll(jcodes)
-
-        // 상태 변경
-        course.status = CourseStatus.ENDED
-        course.endedAt = LocalDateTime.now()
+        course.status = CourseStatus.TERMINATING
         courseRepository.save(course)
+        infrastructureOperationStore.enqueue(course.id, CourseInfrastructureAction.DELETE_WORKLOADS)
     }
 
     // 강의 아카이브: status → ARCHIVED, NS 삭제
@@ -299,16 +248,9 @@ class CourseService(
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "ENDED 상태의 강의만 아카이브할 수 있습니다.")
         }
 
-        // Generator에 NS 삭제 요청
-        val namespace = getCourseNamespace(course)
-        deleteGeneratorResource(
-            generatorBootstrapWebClient,
-            "/api/namespace/$namespace?course_id=${course.id}",
-            "namespace:delete"
-        )
-
-        course.status = CourseStatus.ARCHIVED
+        course.status = CourseStatus.ARCHIVING
         courseRepository.save(course)
+        infrastructureOperationStore.enqueue(course.id, CourseInfrastructureAction.DELETE_NAMESPACE)
     }
 
     // 강의 재개설: status → ACTIVE, NS 재생성
@@ -321,24 +263,15 @@ class CourseService(
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "ENDED 상태의 강의만 재개설할 수 있습니다.")
         }
 
-        // Generator에 NS 재생성 요청
-        try {
-            val namespace = getCourseNamespace(course)
-            generatorBootstrapWebClient.post()
-                .uri("/api/namespace")
-                .attribute(GENERATOR_SCOPE_ATTRIBUTE, "namespace:write")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(mapOf("course_id" to course.id, "namespace" to namespace, "use_vnc" to course.vnc))
-                .retrieve()
-                .bodyToMono(Map::class.java)
-                .block()
-        } catch (ex: Exception) {
-            throw ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "NS 재생성 실패: ${ex.message}")
-        }
-
-        course.status = CourseStatus.ACTIVE
-        course.endedAt = null
+        course.status = CourseStatus.PROVISIONING
         courseRepository.save(course)
+        infrastructureOperationStore.enqueue(course.id, CourseInfrastructureAction.PROVISION_NAMESPACE)
+    }
+
+    fun retryInfrastructure(courseId: Long) {
+        if (!infrastructureOperationStore.retryFailed(courseId)) {
+            throw ResponseStatusException(HttpStatus.CONFLICT, "재시도할 실패 작업이 없습니다.")
+        }
     }
 
     // 전체 강의 조회

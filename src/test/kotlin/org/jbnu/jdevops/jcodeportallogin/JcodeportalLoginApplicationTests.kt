@@ -1,13 +1,14 @@
 package org.jbnu.jdevops.jcodeportallogin
 
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.Assertions.assertNotNull
+import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.test.context.ActiveProfiles
 
+@SpringBootTest
+@ActiveProfiles("test")
 class JcodeportalLoginApplicationTests {
-
     @Test
-    fun `application entry point is loadable`() {
-        assertNotNull(JcodeportalLoginApplication::class.java)
+    fun contextLoads() {
+        // The real Spring context validates configuration properties and bean wiring.
     }
-
 }

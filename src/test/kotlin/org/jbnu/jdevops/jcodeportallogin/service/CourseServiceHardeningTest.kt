@@ -2,12 +2,13 @@ package org.jbnu.jdevops.jcodeportallogin.service
 
 import org.jbnu.jdevops.jcodeportallogin.dto.course.CourseDto
 import org.jbnu.jdevops.jcodeportallogin.entity.Course
+import org.jbnu.jdevops.jcodeportallogin.entity.CourseInfrastructureAction
+import org.jbnu.jdevops.jcodeportallogin.entity.CourseStatus
 import org.jbnu.jdevops.jcodeportallogin.entity.RoleType
 import org.jbnu.jdevops.jcodeportallogin.entity.User
 import org.jbnu.jdevops.jcodeportallogin.entity.UserCourses
 import org.jbnu.jdevops.jcodeportallogin.repo.AssignmentRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.CourseRepository
-import org.jbnu.jdevops.jcodeportallogin.repo.JCodeRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.UserCoursesRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.UserRepository
 import org.jbnu.jdevops.jcodeportallogin.util.CourseKeyUtil
@@ -20,43 +21,26 @@ import org.mockito.Mockito.verify
 import org.mockito.Mockito.`when`
 import org.mockito.ArgumentCaptor
 import org.springframework.http.HttpStatus
-import org.springframework.http.MediaType
 import org.springframework.security.crypto.password.PasswordEncoder
-import org.springframework.web.reactive.function.client.WebClient
-import org.springframework.web.reactive.function.client.ClientResponse
 import org.springframework.web.server.ResponseStatusException
-import reactor.core.publisher.Mono
 import java.util.Optional
 
 class CourseServiceHardeningTest {
     private val userCoursesRepository = mock(UserCoursesRepository::class.java)
     private val assignmentRepository = mock(AssignmentRepository::class.java)
     private val courseRepository = mock(CourseRepository::class.java)
-    private val jCodeRepository = mock(JCodeRepository::class.java)
     private val courseKeyUtil = mock(CourseKeyUtil::class.java)
     private val passwordEncoder = mock(PasswordEncoder::class.java)
     private val userRepository = mock(UserRepository::class.java)
-    private val generatorWebClient = WebClient.builder()
-        .baseUrl("http://generator")
-        .exchangeFunction {
-            Mono.just(
-                ClientResponse.create(HttpStatus.OK)
-                    .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
-                    .body("{}")
-                    .build()
-            )
-        }
-        .build()
+    private val infrastructureOperationStore = mock(CourseInfrastructureOperationStore::class.java)
     private val service = CourseService(
         userCoursesRepository,
         assignmentRepository,
         courseRepository,
-        jCodeRepository,
         courseKeyUtil,
         passwordEncoder,
         userRepository,
-        generatorWebClient,
-        generatorWebClient,
+        infrastructureOperationStore,
     )
 
     @Test
@@ -78,7 +62,7 @@ class CourseServiceHardeningTest {
     @Test
     fun `course creator is registered as course professor`() {
         val creator = User(id = 7, email = "professor@example.com", role = RoleType.PROFESSOR)
-        val savedCourse = course().copy(id = 44)
+        val savedCourse = course().copy(id = 44, status = CourseStatus.PROVISIONING)
         `when`(courseKeyUtil.generateCourseEnrollmentCode("ALG", 1)).thenReturn("raw-key")
         `when`(passwordEncoder.encode("raw-key")).thenReturn("encoded-key")
         `when`(courseRepository.save(org.mockito.ArgumentMatchers.any(Course::class.java))).thenReturn(savedCourse)
@@ -92,6 +76,38 @@ class CourseServiceHardeningTest {
         assertEquals(savedCourse, membership.value.course)
         assertEquals(creator, membership.value.user)
         assertEquals(RoleType.PROFESSOR, membership.value.role)
+        assertEquals(CourseStatus.PROVISIONING, result.status)
+        verify(infrastructureOperationStore).enqueue(44, CourseInfrastructureAction.PROVISION_NAMESPACE)
+    }
+
+    @Test
+    fun `ending a course records desired state before infrastructure work`() {
+        val course = course()
+        `when`(courseRepository.findById(course.id)).thenReturn(Optional.of(course))
+
+        service.endCourse(course.id)
+
+        assertEquals(CourseStatus.TERMINATING, course.status)
+        verify(courseRepository).save(course)
+        verify(infrastructureOperationStore).enqueue(course.id, CourseInfrastructureAction.DELETE_WORKLOADS)
+    }
+
+    @Test
+    fun `failed infrastructure work can be retried`() {
+        `when`(infrastructureOperationStore.retryFailed(10)).thenReturn(true)
+
+        service.retryInfrastructure(10)
+
+        verify(infrastructureOperationStore).retryFailed(10)
+    }
+
+    @Test
+    fun `retry is rejected when no failed infrastructure work exists`() {
+        `when`(infrastructureOperationStore.retryFailed(10)).thenReturn(false)
+
+        val ex = assertThrows<ResponseStatusException> { service.retryInfrastructure(10) }
+
+        assertEquals(HttpStatus.CONFLICT, ex.statusCode)
     }
 
     private fun course() = Course(
