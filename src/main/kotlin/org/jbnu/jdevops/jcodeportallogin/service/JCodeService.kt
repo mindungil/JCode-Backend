@@ -11,6 +11,7 @@ import org.jbnu.jdevops.jcodeportallogin.repo.UserCoursesRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.UserRepository
 import org.jbnu.jdevops.jcodeportallogin.util.AuthorizationUtil
 import org.springframework.beans.factory.annotation.Qualifier
+import org.jbnu.jdevops.jcodeportallogin.config.GENERATOR_SCOPE_ATTRIBUTE
 import org.springframework.http.HttpMethod
 import org.springframework.stereotype.Service
 import org.springframework.web.reactive.function.client.WebClient
@@ -22,7 +23,7 @@ import org.springframework.transaction.annotation.Transactional
 
 @Service
 class JCodeService(
-    @Qualifier("generatorWebClient")
+    @Qualifier("generatorWorkspaceWebClient")
     private val webClient: WebClient,
     private val jCodeRepository: JCodeRepository,
     private val courseRepository: CourseRepository,
@@ -73,6 +74,7 @@ class JCodeService(
         val assignmentDirs = assignmentRepository.findByCourseId(course.id).map { it.dirName }
 
         val jcodeRequestBody = JCodeRequestDto (
+            course_id = course.id,
             namespace = "jcode-${course.code.lowercase()}-${course.clss}",
             deployment_name = deployment_name,
             service_name = deployment_name + "-svc",
@@ -90,7 +92,7 @@ class JCodeService(
         val externalJcodeDto: JCodeResponseDto? = try {
             webClient.post()
                 .uri("/api/jcode")
-                .header("Authorization", "Bearer $token")
+                .attribute(GENERATOR_SCOPE_ATTRIBUTE, "jcode:write")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(jcodeRequestBody)
                 .retrieve()
@@ -155,6 +157,7 @@ class JCodeService(
             "jcode-${course.code.lowercase()}-${course.clss}-${user.studentNum}"
         }
         val request = JCodeDeleteRequestDto(
+            course_id = course.id,
             namespace = "jcode-${course.code.lowercase()}-${course.clss}",
             deployment_name = deploymentName,
             service_name = "$deploymentName-svc"
@@ -163,7 +166,7 @@ class JCodeService(
         try {
             webClient.method(HttpMethod.DELETE)
                 .uri("/api/jcode")
-                .header("Authorization", "Bearer $token")
+                .attribute(GENERATOR_SCOPE_ATTRIBUTE, "jcode:delete")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(request)
                 .retrieve()

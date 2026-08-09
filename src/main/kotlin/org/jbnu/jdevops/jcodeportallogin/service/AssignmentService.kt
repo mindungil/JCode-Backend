@@ -10,6 +10,7 @@ import org.jbnu.jdevops.jcodeportallogin.repo.CourseRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.UserRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.UserCoursesRepository
 import org.springframework.beans.factory.annotation.Qualifier
+import org.jbnu.jdevops.jcodeportallogin.config.GENERATOR_SCOPE_ATTRIBUTE
 import org.springframework.http.MediaType
 import org.springframework.stereotype.Service
 import org.springframework.web.reactive.function.client.WebClient
@@ -24,7 +25,7 @@ class AssignmentService(
     private val courseRepository: CourseRepository,
     private val userRepository: UserRepository,
     private val userCoursesRepository: UserCoursesRepository,
-    @Qualifier("generatorWebClient")
+    @Qualifier("generatorWorkspaceWebClient")
     private val generatorWebClient: WebClient
 ) {
 
@@ -63,12 +64,13 @@ class AssignmentService(
             .take(80)
     }
 
-    private fun provisionAssignmentDirectory(courseCode: String, clss: Int, dirName: String, token: String) {
+    private fun provisionAssignmentDirectory(courseId: Long, courseCode: String, clss: Int, dirName: String) {
         generatorWebClient.post()
             .uri("/api/workspace/provision")
-            .header("Authorization", "Bearer $token")
+            .attribute(GENERATOR_SCOPE_ATTRIBUTE, "workspace:write")
             .contentType(MediaType.APPLICATION_JSON)
             .bodyValue(mapOf(
+                "course_id" to courseId,
                 "namespace" to "jcode-${courseCode.lowercase()}-$clss",
                 "dir_name" to dirName
             ))
@@ -105,7 +107,7 @@ class AssignmentService(
             deadlineDate = assignmentDto.deadlineDate,
             course = course))
 
-        provisionAssignmentDirectory(course.code, course.clss, dirName, token)
+        provisionAssignmentDirectory(course.id, course.code, course.clss, dirName)
 
         return AssignmentDto(
             assignmentId = assignment.id,
@@ -163,10 +165,11 @@ class AssignmentService(
         val result = try {
             generatorWebClient.post()
                 .uri("/api/workspace/starter-code")
-                .header("Authorization", "Bearer $token")
+                .attribute(GENERATOR_SCOPE_ATTRIBUTE, "workspace:write")
                 .contentType(org.springframework.http.MediaType.MULTIPART_FORM_DATA)
                 .bodyValue(
                     org.springframework.util.LinkedMultiValueMap<String, Any>().apply {
+                        add("course_id", course.id)
                         add("namespace", "jcode-${course.code.lowercase()}-${course.clss}")
                         add("dir_name", assignment.dirName)
                         add("file", object : org.springframework.core.io.ByteArrayResource(file.bytes) {

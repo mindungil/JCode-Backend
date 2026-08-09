@@ -4,6 +4,8 @@ import org.jbnu.jdevops.jcodeportallogin.dto.watcher.StudentSubmissionSummary
 import org.jbnu.jdevops.jcodeportallogin.dto.watcher.SubmissionDashboardDto
 import org.jbnu.jdevops.jcodeportallogin.dto.watcher.WatcherBuildLogDto
 import org.jbnu.jdevops.jcodeportallogin.dto.watcher.WatcherRunLogDto
+import org.jbnu.jdevops.jcodeportallogin.dto.watcher.WatcherStatus
+import org.jbnu.jdevops.jcodeportallogin.dto.watcher.GraphDataListDto
 import org.jbnu.jdevops.jcodeportallogin.entity.RoleType
 import org.jbnu.jdevops.jcodeportallogin.repo.AssignmentRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.CourseRepository
@@ -16,6 +18,7 @@ import org.springframework.stereotype.Service
 import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.server.ResponseStatusException
 import java.time.Duration
+import org.slf4j.LoggerFactory
 
 @Service
 class SubmissionDashboardService(
@@ -26,6 +29,16 @@ class SubmissionDashboardService(
     private val userRepository: UserRepository,
     private val userCoursesRepository: UserCoursesRepository
 ) {
+    private val logger = LoggerFactory.getLogger(javaClass)
+
+    private data class WatcherFetch<T>(val value: T, val available: Boolean)
+
+    private fun <T> fetchWatcher(defaultValue: T, description: String, call: () -> T?): WatcherFetch<T> = try {
+        WatcherFetch(call() ?: defaultValue, true)
+    } catch (ex: Exception) {
+        logger.warn("Watcher call failed: {}", description, ex)
+        WatcherFetch(defaultValue, false)
+    }
 
     fun getDashboard(courseId: Long, assignmentId: Long, email: String): SubmissionDashboardDto {
         val user = userRepository.findByEmail(email)
@@ -58,71 +71,70 @@ class SubmissionDashboardService(
         val summaries = studentCourses.mapNotNull { uc ->
             val student = uc.user
             val sNum = student.studentNum ?: return@mapNotNull null
-            try {
-                buildStudentSummary(classDiv, assignment.watcherHwName(), sNum, student.name)
-            } catch (ex: Exception) {
-                StudentSubmissionSummary(
-                    studentNum = sNum,
-                    studentName = student.name,
-                    buildCount = 0,
-                    buildFailCount = 0,
-                    runCount = 0,
-                    totalSizeChange = 0,
-                    maxSingleChange = 0,
-                    codeVelocity = 0.0,
-                    totalWorkMinutes = 0,
-                    firstActivity = null,
-                    lastActivity = null,
-                    flags = listOf("⚠️ 활동 없음")
-                )
-            }
+            buildStudentSummary(classDiv, assignment.watcherHwName(), sNum, student.name)
         }
 
         val flaggedCount = summaries.count { it.flags.isNotEmpty() }
+        val dashboardStatus = when {
+            summaries.isNotEmpty() && summaries.all { it.watcherStatus == WatcherStatus.UNAVAILABLE } -> WatcherStatus.UNAVAILABLE
+            summaries.any { it.watcherStatus != WatcherStatus.OK } -> WatcherStatus.PARTIAL
+            else -> WatcherStatus.OK
+        }
 
         return SubmissionDashboardDto(
             assignmentName = assignment.name,
             totalStudents = studentCourses.size,
             submittedCount = summaries.count { it.buildCount > 0 || it.totalSizeChange > 0 },
             flaggedCount = flaggedCount,
+            watcherStatus = dashboardStatus,
             students = summaries
         )
     }
 
     private fun buildStudentSummary(classDiv: String, hwName: String, studentNum: Int, studentName: String?): StudentSubmissionSummary {
         // 빌드 로그 조회
-        val buildLogs = try {
+        val buildResult = fetchWatcher(emptyList<WatcherBuildLogDto>(), "build logs for $studentNum") {
             webClient.get()
-                .uri("/api/{class_div}/{hw_name}/{student_num}/logs/build", classDiv, hwName, studentNum)
+                .uri("/api/{class_div}/{hw_name}/{student_num}/logs/build?limit=1000", classDiv, hwName, studentNum)
                 .retrieve()
                 .bodyToMono(object : ParameterizedTypeReference<List<WatcherBuildLogDto>>() {})
-                .block() ?: emptyList()
-        } catch (ex: Exception) { emptyList() }
+                .block()
+        }
+        val buildLogs = buildResult.value
 
         // 실행 로그 조회
-        val runLogs = try {
+        val runResult = fetchWatcher(emptyList<WatcherRunLogDto>(), "run logs for $studentNum") {
             webClient.get()
-                .uri("/api/{class_div}/{hw_name}/{student_num}/logs/run", classDiv, hwName, studentNum)
+                .uri("/api/{class_div}/{hw_name}/{student_num}/logs/run?limit=1000", classDiv, hwName, studentNum)
                 .retrieve()
                 .bodyToMono(object : ParameterizedTypeReference<List<WatcherRunLogDto>>() {})
-                .block() ?: emptyList()
-        } catch (ex: Exception) { emptyList() }
+                .block()
+        }
+        val runLogs = runResult.value
 
         // 그래프 데이터 (코드 크기 변화) 조회 — 1분 간격
-        val graphData = try {
+        val graphResult = fetchWatcher(GraphDataListDto(emptyList()), "graph data for $studentNum") {
             webClient.get()
                 .uri("/api/graph_data/{class_div}/{hw_name}/{student_num}/{interval}", classDiv, hwName, studentNum, 1)
                 .retrieve()
-                .bodyToMono(org.jbnu.jdevops.jcodeportallogin.dto.watcher.GraphDataListDto::class.java)
+                .bodyToMono(GraphDataListDto::class.java)
                 .block()
-        } catch (ex: Exception) { null }
+        }
+        val graphData = graphResult.value
+
+        val successfulSources = listOf(buildResult, runResult, graphResult).count { it.available }
+        val watcherStatus = when (successfulSources) {
+            3 -> WatcherStatus.OK
+            0 -> WatcherStatus.UNAVAILABLE
+            else -> WatcherStatus.PARTIAL
+        }
 
         val buildCount = buildLogs.size
         val buildFailCount = buildLogs.count { it.exit_code != 0 }
         val runCount = runLogs.size
 
         // 코드 크기 변화 분석
-        val trends = graphData?.trends ?: emptyList()
+        val trends = graphData.trends
         val totalSizeChange = trends.sumOf { kotlin.math.abs(it.size_change) }
         val maxSingleChange = trends.maxOfOrNull { kotlin.math.abs(it.size_change) } ?: 0L
 
@@ -143,6 +155,10 @@ class SubmissionDashboardService(
 
         // 플래그 판정
         val flags = mutableListOf<String>()
+
+        if (watcherStatus == WatcherStatus.OK && buildCount == 0 && runCount == 0 && totalSizeChange == 0L) {
+            flags.add("⚠️ 활동 없음")
+        }
 
         // 1. 컴파일 미시도
         if (buildCount == 0 && totalSizeChange > 0) {
@@ -176,7 +192,8 @@ class SubmissionDashboardService(
             totalWorkMinutes = totalWorkMinutes,
             firstActivity = firstActivity?.toString(),
             lastActivity = lastActivity?.toString(),
-            flags = flags
+            flags = flags,
+            watcherStatus = watcherStatus
         )
     }
 }

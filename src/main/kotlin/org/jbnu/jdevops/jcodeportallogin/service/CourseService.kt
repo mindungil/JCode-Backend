@@ -7,6 +7,8 @@ import org.jbnu.jdevops.jcodeportallogin.dto.user.UserInfoDto
 import org.jbnu.jdevops.jcodeportallogin.entity.Course
 import org.jbnu.jdevops.jcodeportallogin.entity.CourseStatus
 import org.jbnu.jdevops.jcodeportallogin.entity.RoleType
+import org.jbnu.jdevops.jcodeportallogin.entity.UserCourses
+import org.jbnu.jdevops.jcodeportallogin.config.GENERATOR_SCOPE_ATTRIBUTE
 import org.jbnu.jdevops.jcodeportallogin.repo.AssignmentRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.CourseRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.JCodeRepository
@@ -33,19 +35,21 @@ class CourseService(
     private val courseKeyUtil: CourseKeyUtil,
     private val passwordEncoder: PasswordEncoder,
     private val userRepository: UserRepository,
-    @Qualifier("generatorWebClient")
-    private val generatorWebClient: WebClient
+    @Qualifier("generatorBootstrapWebClient")
+    private val generatorBootstrapWebClient: WebClient,
+    @Qualifier("generatorWorkspaceWebClient")
+    private val generatorWorkspaceWebClient: WebClient
 ) {
 
     private fun getCourseNamespace(course: Course): String {
         return "jcode-${course.code.lowercase()}-${course.clss}"
     }
 
-    private fun deleteGeneratorResource(uri: String, token: String) {
+    private fun deleteGeneratorResource(client: WebClient, uri: String, scope: String) {
         try {
-            generatorWebClient.delete()
+            client.delete()
                 .uri(uri)
-                .header("Authorization", "Bearer $token")
+                .attribute(GENERATOR_SCOPE_ATTRIBUTE, scope)
                 .retrieve()
                 .bodyToMono(Map::class.java)
                 .block()
@@ -143,7 +147,7 @@ class CourseService(
 
     // 강의 추가 (DB 저장 + Generator에 NS 초기화 요청)
     @Transactional
-    fun createCourse(courseDto: CourseDto, token: String): CourseDto {
+    fun createCourse(courseDto: CourseDto, creatorEmail: String): CourseDto {
         // 랜덤 key를 생성하여 할당
         val rawKey = courseKeyUtil.generateCourseEnrollmentCode(courseDto.code, courseDto.clss)
         // PasswordEncoder를 사용해 암호화 (해싱) 처리
@@ -163,13 +167,19 @@ class CourseService(
             courseKey = encryptedKey
         ))
 
+        val creator = userRepository.findByEmail(creatorEmail)
+            ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Course creator not found")
+        userCoursesRepository.save(
+            UserCourses(course = course, user = creator, role = RoleType.PROFESSOR)
+        )
+
         // DB와 Kubernetes가 성공 상태로 어긋나지 않도록 실패를 전파한다.
         val namespace = getCourseNamespace(course)
-        generatorWebClient.post()
+        generatorBootstrapWebClient.post()
             .uri("/api/namespace")
-            .header("Authorization", "Bearer $token")
+            .attribute(GENERATOR_SCOPE_ATTRIBUTE, "namespace:write")
             .contentType(MediaType.APPLICATION_JSON)
-            .bodyValue(mapOf("namespace" to namespace, "use_vnc" to course.vnc))
+            .bodyValue(mapOf("course_id" to course.id, "namespace" to namespace, "use_vnc" to course.vnc))
             .retrieve()
             .bodyToMono(Map::class.java)
             .block()
@@ -233,14 +243,18 @@ class CourseService(
     }
 
     @Transactional
-    fun deleteCourse(courseId: Long, token: String) {
+    fun deleteCourse(courseId: Long) {
         val course = courseRepository.findById(courseId)
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
 
         // ARCHIVED 상태가 아니면 NS도 삭제
         if (course.status != CourseStatus.ARCHIVED) {
             val namespace = getCourseNamespace(course)
-            deleteGeneratorResource("/api/namespace/$namespace", token)
+            deleteGeneratorResource(
+                generatorBootstrapWebClient,
+                "/api/namespace/$namespace?course_id=${course.id}",
+                "namespace:delete"
+            )
         }
 
         // 강의 삭제
@@ -249,7 +263,7 @@ class CourseService(
 
     // 강의 종료: status → ENDED, pod 전체 삭제, jcode 레코드 삭제
     @Transactional
-    fun endCourse(courseId: Long, token: String) {
+    fun endCourse(courseId: Long) {
         val course = courseRepository.findById(courseId)
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
 
@@ -259,7 +273,11 @@ class CourseService(
 
         // Generator에 NS 내 전체 리소스 삭제 요청 (NS는 유지)
         val namespace = getCourseNamespace(course)
-        deleteGeneratorResource("/api/namespace/$namespace/resources", token)
+        deleteGeneratorResource(
+            generatorWorkspaceWebClient,
+            "/api/namespace/$namespace/resources?course_id=${course.id}",
+            "namespace:resources:delete"
+        )
 
         // jcode 테이블에서 해당 course의 모든 레코드 삭제
         val jcodes = jCodeRepository.findByCourseId(courseId)
@@ -273,7 +291,7 @@ class CourseService(
 
     // 강의 아카이브: status → ARCHIVED, NS 삭제
     @Transactional
-    fun archiveCourse(courseId: Long, token: String) {
+    fun archiveCourse(courseId: Long) {
         val course = courseRepository.findById(courseId)
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
 
@@ -283,7 +301,11 @@ class CourseService(
 
         // Generator에 NS 삭제 요청
         val namespace = getCourseNamespace(course)
-        deleteGeneratorResource("/api/namespace/$namespace", token)
+        deleteGeneratorResource(
+            generatorBootstrapWebClient,
+            "/api/namespace/$namespace?course_id=${course.id}",
+            "namespace:delete"
+        )
 
         course.status = CourseStatus.ARCHIVED
         courseRepository.save(course)
@@ -291,7 +313,7 @@ class CourseService(
 
     // 강의 재개설: status → ACTIVE, NS 재생성
     @Transactional
-    fun reopenCourse(courseId: Long, token: String) {
+    fun reopenCourse(courseId: Long) {
         val course = courseRepository.findById(courseId)
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
 
@@ -302,11 +324,11 @@ class CourseService(
         // Generator에 NS 재생성 요청
         try {
             val namespace = getCourseNamespace(course)
-            generatorWebClient.post()
+            generatorBootstrapWebClient.post()
                 .uri("/api/namespace")
-                .header("Authorization", "Bearer $token")
+                .attribute(GENERATOR_SCOPE_ATTRIBUTE, "namespace:write")
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(mapOf("namespace" to namespace, "use_vnc" to course.vnc))
+                .bodyValue(mapOf("course_id" to course.id, "namespace" to namespace, "use_vnc" to course.vnc))
                 .retrieve()
                 .bodyToMono(Map::class.java)
                 .block()

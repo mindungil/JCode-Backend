@@ -13,7 +13,6 @@ import org.springframework.security.access.prepost.PreAuthorize
 import org.springframework.security.core.Authentication
 import org.springframework.web.bind.annotation.*
 import org.springframework.web.server.ResponseStatusException
-import jakarta.servlet.http.HttpServletRequest
 
 @Tag(name = "Course API", description = "강의 관련 API")
 @RestController
@@ -21,10 +20,6 @@ import jakarta.servlet.http.HttpServletRequest
 class CourseController(
     private val courseService: CourseService
 ) {
-    private fun extractToken(request: HttpServletRequest): String? {
-        return request.getHeader("Authorization")?.removePrefix("Bearer ")?.trim()
-    }
-
     // 전체 강의 목록 조회 (ADMIN 전용)
     @Operation(
         summary = "전체 강의 목록 조회",
@@ -75,10 +70,10 @@ class CourseController(
     @Operation(summary = "강의 추가", description = "새로운 강의를 생성합니다. (ADMIN, PROFESSOR 전용)")
     @PreAuthorize("hasAnyRole('ADMIN', 'PROFESSOR')")
     @PostMapping
-    fun createCourse(@RequestBody courseDto: CourseDto, request: HttpServletRequest): ResponseEntity<CourseDto> {
-        val token = extractToken(request)
-            ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authorization token is required")
-        return ResponseEntity.ok(courseService.createCourse(courseDto, token))
+    fun createCourse(@RequestBody courseDto: CourseDto, authentication: Authentication): ResponseEntity<CourseDto> {
+        val email = authentication.principal as? String
+            ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Missing email in authentication")
+        return ResponseEntity.ok(courseService.createCourse(courseDto, email))
     }
 
     // 강의 수정 (ADMIN, PROFESSOR 전용)
@@ -95,10 +90,8 @@ class CourseController(
     @Operation(summary = "강의 삭제", description = "특정 강의를 삭제합니다. (ADMIN 전용)")
     @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/{courseId}")
-    fun deleteCourse(@PathVariable courseId: Long, request: HttpServletRequest): ResponseEntity<String> {
-        val token = extractToken(request)
-            ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authorization token is required")
-        courseService.deleteCourse(courseId, token)
+    fun deleteCourse(@PathVariable courseId: Long): ResponseEntity<String> {
+        courseService.deleteCourse(courseId)
         return ResponseEntity.ok("Course deleted successfully")
     }
 
@@ -106,10 +99,8 @@ class CourseController(
     @Operation(summary = "강의 종료", description = "강의를 종료합니다. Pod 전체 삭제, JCode 레코드 삭제. (ADMIN 전용)")
     @PreAuthorize("hasRole('ADMIN')")
     @PutMapping("/{courseId}/end")
-    fun endCourse(@PathVariable courseId: Long, request: HttpServletRequest): ResponseEntity<String> {
-        val token = extractToken(request)
-            ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authorization token is required")
-        courseService.endCourse(courseId, token)
+    fun endCourse(@PathVariable courseId: Long): ResponseEntity<String> {
+        courseService.endCourse(courseId)
         return ResponseEntity.ok("Course ended successfully")
     }
 
@@ -117,10 +108,8 @@ class CourseController(
     @Operation(summary = "강의 아카이브", description = "종료된 강의를 아카이브합니다. NS 삭제. (ADMIN 전용)")
     @PreAuthorize("hasRole('ADMIN')")
     @PutMapping("/{courseId}/archive")
-    fun archiveCourse(@PathVariable courseId: Long, request: HttpServletRequest): ResponseEntity<String> {
-        val token = extractToken(request)
-            ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authorization token is required")
-        courseService.archiveCourse(courseId, token)
+    fun archiveCourse(@PathVariable courseId: Long): ResponseEntity<String> {
+        courseService.archiveCourse(courseId)
         return ResponseEntity.ok("Course archived successfully")
     }
 
@@ -128,10 +117,8 @@ class CourseController(
     @Operation(summary = "강의 재개설", description = "종료된 강의를 재개설합니다. NS 재생성. (ADMIN 전용)")
     @PreAuthorize("hasRole('ADMIN')")
     @PutMapping("/{courseId}/reopen")
-    fun reopenCourse(@PathVariable courseId: Long, request: HttpServletRequest): ResponseEntity<String> {
-        val token = extractToken(request)
-            ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authorization token is required")
-        courseService.reopenCourse(courseId, token)
+    fun reopenCourse(@PathVariable courseId: Long): ResponseEntity<String> {
+        courseService.reopenCourse(courseId)
         return ResponseEntity.ok("Course reopened successfully")
     }
 
