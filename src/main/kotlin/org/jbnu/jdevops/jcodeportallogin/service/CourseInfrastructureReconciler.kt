@@ -76,14 +76,21 @@ class CourseInfrastructureReconciler(
                 bootstrapClient,
                 "/api/namespace/$namespace?course_id=${course.id}",
                 "namespace:delete",
-                operation.idempotencyKey
+                operation.idempotencyKey,
+                requireDeletedConfirmation = true
             )
         }
     }
 
-    private fun delete(client: WebClient, uri: String, scope: String, idempotencyKey: String) {
+    private fun delete(
+        client: WebClient,
+        uri: String,
+        scope: String,
+        idempotencyKey: String,
+        requireDeletedConfirmation: Boolean = false
+    ) {
         try {
-            client.delete()
+            val response = client.delete()
                 .uri(uri)
                 .attribute(GENERATOR_SCOPE_ATTRIBUTE, scope)
                 .header("Idempotency-Key", idempotencyKey)
@@ -91,6 +98,9 @@ class CourseInfrastructureReconciler(
                 .bodyToMono(Map::class.java)
                 .timeout(Duration.ofSeconds(requestTimeoutSeconds))
                 .block()
+            if (requireDeletedConfirmation && response?.get("deleted") != true) {
+                throw IllegalStateException("Generator가 Namespace 실제 삭제 완료를 확인하지 않았습니다.")
+            }
         } catch (_: WebClientResponseException.NotFound) {
             // Desired state is already reached.
         }
