@@ -7,7 +7,7 @@ on:
         description: "Deployment environment"
         required: true
         type: choice
-        options: [dev]
+        options: [dev, production]
       digest:
         description: "Backend digest verified in dev"
         required: true

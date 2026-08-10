@@ -14,10 +14,12 @@ spec:
       labels:
         app: jcode-backend
     spec:
+      imagePullSecrets:
+      - name: watcher-harbor-registry-secret
       containers:
       - name: jcode-backend
-        image: jcode-backend:test
-        imagePullPolicy: IfNotPresent # local image 사용
+        image: harbor.jbnu.ac.kr/jdevops/jcode-backend:REPLACE_WITH_COMMIT_SHA
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8080
         env:
