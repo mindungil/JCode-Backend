@@ -29,6 +29,10 @@ spec:
         env:
         - name: SPRING_PROFILES_ACTIVE
           value: prod
+        - name: TZ
+          value: Asia/Seoul
+        - name: SPRING_JACKSON_TIME_ZONE
+          value: Asia/Seoul
         envFrom:
         - configMapRef:
             name: jcode-backend-config
