@@ -25,8 +25,8 @@ data:
   # Service Url
   ROUTER_URL: "https://router.example.com/jcode/"
   WATCHER_URL: "https://watcher.example.com"
-  GENERATOR_BOOTSTRAP_URL: "http://jcode-bootstrap-svc.watcher.svc.cluster.local:5000"
-  GENERATOR_WORKSPACE_URL: "http://jcode-generator-svc.watcher.svc.cluster.local:5000"
+  GENERATOR_BOOTSTRAP_URL: "http://jcode-bootstrap-svc:5000"
+  GENERATOR_WORKSPACE_URL: "http://jcode-generator-svc:5000"
   GENERATOR_AUTH_ISSUER: "jcode-backend"
   GENERATOR_AUTH_AUDIENCE: "jcode-generator"
   GENERATOR_AUTH_SUBJECT: "jcode-backend"
