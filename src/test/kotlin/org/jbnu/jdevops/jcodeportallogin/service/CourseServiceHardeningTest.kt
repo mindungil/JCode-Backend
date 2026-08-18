@@ -117,7 +117,7 @@ class CourseServiceHardeningTest {
             environmentProfile = CourseEnvironmentProfile.CUSTOM,
             useVnc = false,
             useJupyter = true,
-            baseImage = "harbor.jbnu.ac.kr/jdevops/custom:latest",
+            baseImage = "harbor.jedutools.io/jdevops/custom:latest",
             resourceProfile = org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceResourceProfile.GPU,
             egressPolicy = org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceEgressPolicy.RESTRICTED,
             workspaceScope = org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceScope.ASSIGNMENT
@@ -128,6 +128,43 @@ class CourseServiceHardeningTest {
         }
 
         assertEquals(HttpStatus.BAD_REQUEST, error.statusCode)
+    }
+
+    @Test
+    fun `custom profile accepts immutable image from configured registry`() {
+        val creator = User(id = 7, email = "professor@example.com", role = RoleType.PROFESSOR)
+        val configuredService = CourseService(
+            userCoursesRepository,
+            assignmentRepository,
+            courseRepository,
+            courseKeyUtil,
+            passwordEncoder,
+            userRepository,
+            starterArtifactRepository,
+            jCodeRepository,
+            workspaceOperationStore,
+            infrastructureOperationStore,
+            "registry.internal:5443",
+        )
+        val request = dto(code = "CUSTOM", clss = 1, vnc = false).copy(
+            environmentProfile = CourseEnvironmentProfile.CUSTOM,
+            useVnc = false,
+            useJupyter = true,
+            baseImage = "registry.internal:5443/jdevops/custom:build-0123456789abcdef",
+            resourceProfile = org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceResourceProfile.GPU,
+            egressPolicy = org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceEgressPolicy.RESTRICTED,
+            workspaceScope = org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceScope.ASSIGNMENT
+        )
+        `when`(courseKeyUtil.generateCourseEnrollmentCode("CUSTOM", 1)).thenReturn("raw-key")
+        `when`(passwordEncoder.encode("raw-key")).thenReturn("encoded-key")
+        `when`(userRepository.findByEmail(creator.email)).thenReturn(creator)
+        `when`(courseRepository.save(org.mockito.ArgumentMatchers.any(Course::class.java))).thenAnswer {
+            (it.arguments[0] as Course).copy(id = 46)
+        }
+
+        val result = configuredService.createCourse(request, creator.email)
+
+        assertEquals("registry.internal:5443/jdevops/custom:build-0123456789abcdef", result.baseImage)
     }
 
     @Test
