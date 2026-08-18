@@ -10,7 +10,9 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.domain.PageRequest
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import java.nio.charset.StandardCharsets
 import java.time.LocalDateTime
+import java.util.UUID
 import kotlin.math.min
 
 data class ClaimedWorkspaceOperation(
@@ -39,6 +41,22 @@ class WorkspaceOperationStore(
     fun enqueue(targetType: WorkspaceOperationTarget, targetId: Long, action: WorkspaceOperationAction, artifactId: Long? = null) {
         operationRepository.save(
             WorkspaceOperation(targetType = targetType, targetId = targetId, action = action, artifactId = artifactId)
+        )
+    }
+
+    @Transactional
+    fun enqueueBackfillOnce(targetId: Long, action: WorkspaceOperationAction) {
+        val key = UUID.nameUUIDFromBytes(
+            "assignment-v7:$targetId:${action.name}".toByteArray(StandardCharsets.UTF_8)
+        ).toString()
+        if (operationRepository.existsByIdempotencyKey(key)) return
+        operationRepository.save(
+            WorkspaceOperation(
+                targetType = WorkspaceOperationTarget.ASSIGNMENT,
+                targetId = targetId,
+                action = action,
+                idempotencyKey = key
+            )
         )
     }
 

@@ -1,6 +1,7 @@
 ALTER TABLE assignment
     ADD COLUMN workspace_key VARCHAR(80) NULL,
     ADD COLUMN legacy_dir_name VARCHAR(100) NULL,
+    ADD COLUMN path_backfill_status VARCHAR(16) NULL,
     ADD COLUMN lifecycle_status VARCHAR(24) NULL,
     ADD COLUMN schedule_status VARCHAR(24) NULL,
     ADD COLUMN last_error TEXT NULL,
@@ -11,6 +12,7 @@ ALTER TABLE assignment
 UPDATE assignment
 SET legacy_dir_name = NULLIF(TRIM(dir_name), ''),
     workspace_key = CONCAT('assignment-', id),
+    path_backfill_status = 'PENDING',
     lifecycle_status = 'PROVISIONING',
     schedule_status = CASE
         WHEN kickoff_date > CURRENT_TIMESTAMP THEN 'SCHEDULED'
@@ -62,21 +64,3 @@ CREATE TABLE workspace_operation (
     INDEX ix_workspace_operation_ready (status, next_attempt_at, locked_at),
     INDEX ix_workspace_operation_target (target_type, target_id, status)
 );
-
-INSERT INTO workspace_operation (
-    target_type, target_id, action, status, idempotency_key, attempts,
-    next_attempt_at, created_at, updated_at
-)
-SELECT 'ASSIGNMENT', id, 'MIGRATE_ASSIGNMENT_PATH', 'PENDING', UUID(), 0,
-       CURRENT_TIMESTAMP(6), CURRENT_TIMESTAMP(6), CURRENT_TIMESTAMP(6)
-FROM assignment
-WHERE workspace_key IS NOT NULL;
-
-INSERT INTO workspace_operation (
-    target_type, target_id, action, status, idempotency_key, attempts,
-    next_attempt_at, created_at, updated_at
-)
-SELECT 'ASSIGNMENT', id, 'ARCHIVE_FINAL_SUBMISSION', 'PENDING', UUID(), 0,
-       CURRENT_TIMESTAMP(6), CURRENT_TIMESTAMP(6), CURRENT_TIMESTAMP(6)
-FROM assignment
-WHERE schedule_status = 'CLOSED';

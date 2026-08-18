@@ -72,6 +72,21 @@ class WorkspaceOperationStoreTest {
         assertEquals(WorkspaceOperationStatus.SUCCEEDED, operations.allValues.last().status)
     }
 
+    @Test
+    fun `backfill operation is not duplicated on rerun`() {
+        store.enqueueBackfillOnce(5, WorkspaceOperationAction.MIGRATE_ASSIGNMENT_PATH)
+
+        val operation = ArgumentCaptor.forClass(WorkspaceOperation::class.java)
+        verify(operationRepository).save(operation.capture())
+        assertEquals(36, operation.value.idempotencyKey.length)
+        assertEquals(WorkspaceOperationAction.MIGRATE_ASSIGNMENT_PATH, operation.value.action)
+
+        `when`(operationRepository.existsByIdempotencyKey(operation.value.idempotencyKey)).thenReturn(true)
+        store.enqueueBackfillOnce(5, WorkspaceOperationAction.MIGRATE_ASSIGNMENT_PATH)
+
+        verify(operationRepository, times(1)).save(org.mockito.ArgumentMatchers.any(WorkspaceOperation::class.java))
+    }
+
     private fun claimed(operation: WorkspaceOperation) = ClaimedWorkspaceOperation(
         operation.id,
         operation.targetType,
