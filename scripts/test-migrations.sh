@@ -34,8 +34,8 @@ done
 
 [[ "$("${database[@]}" -e "SELECT COUNT(*) FROM course WHERE environment_profile='ALGORITHM' AND resource_profile='STANDARD' AND workspace_scope='COURSE'")" == 1 ]]
 [[ "$("${database[@]}" -e "SELECT COUNT(*) FROM assignment WHERE workspace_key=CONCAT('assignment-', id) AND lifecycle_status='PROVISIONING'")" == 2 ]]
-[[ "$("${database[@]}" -e "SELECT COUNT(*) FROM workspace_operation WHERE action='MIGRATE_ASSIGNMENT_PATH'")" == 2 ]]
-[[ "$("${database[@]}" -e "SELECT COUNT(*) FROM workspace_operation WHERE action='ARCHIVE_FINAL_SUBMISSION'")" == 2 ]]
+[[ "$("${database[@]}" -e "SELECT COUNT(*) FROM assignment WHERE path_backfill_status='PENDING'")" == 2 ]]
+[[ "$("${database[@]}" -e "SELECT COUNT(*) FROM workspace_operation")" == 0 ]]
 [[ "$("${database[@]}" -e "SELECT COUNT(*) FROM jcode WHERE instance_key='1:0:false' AND lifecycle_status='READY'")" == 1 ]]
 [[ "$("${database[@]}" -e "SELECT COUNT(*) FROM jcode WHERE instance_key='1:0:false' AND lifecycle_status='ARCHIVED'")" == 1 ]]
 

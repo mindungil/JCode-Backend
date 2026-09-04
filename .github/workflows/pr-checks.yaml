@@ -37,3 +37,16 @@ jobs:
               assert f"{service}.watcher.svc.cluster.local" not in config
               assert f"{service}.watcher.svc.cluster.local" not in example
           PY
+      - name: Validate assignment path backfill separation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          migration = Path("src/main/resources/db/migration/V7__add_assignment_lifecycle.sql").read_text()
+          job = Path("k8s/assignment-path-backfill-job.yaml").read_text()
+          assert "path_backfill_status = 'PENDING'" in migration
+          assert "INSERT INTO workspace_operation" not in migration
+          assert "workspace.assignment-path-backfill.enabled=true" in job
+          assert "workspace.assignment-path-backfill.missing-namespace=archive" in job
+          assert "app: jcode-assignment-path-backfill" in job
+          PY
