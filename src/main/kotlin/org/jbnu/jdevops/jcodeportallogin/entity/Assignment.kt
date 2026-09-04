@@ -21,6 +21,12 @@ enum class AssignmentScheduleStatus {
     ARCHIVED
 }
 
+enum class AssignmentPathBackfillStatus {
+    PENDING,
+    REGISTERED,
+    ARCHIVED
+}
+
 @Entity
 @Table(name = "assignment")
 data class Assignment(
@@ -46,6 +52,10 @@ data class Assignment(
 
     @Column(name = "legacy_dir_name", length = 100)
     var legacyDirName: String? = null,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "path_backfill_status", length = 16)
+    var pathBackfillStatus: AssignmentPathBackfillStatus? = null,
 
     @Column(name = "has_starter_code", nullable = false)
     var hasStarterCode: Boolean = false,
