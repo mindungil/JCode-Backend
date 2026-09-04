@@ -28,7 +28,7 @@ for migration in src/main/resources/db/migration/V{1..5}__*.sql; do
   "${database[@]}" < "$migration"
 done
 "${database[@]}" < src/test/resources/db/legacy-fixture.sql
-for migration in src/main/resources/db/migration/V{6..8}__*.sql; do
+for migration in src/main/resources/db/migration/V{6..9}__*.sql; do
   "${database[@]}" < "$migration"
 done
 
