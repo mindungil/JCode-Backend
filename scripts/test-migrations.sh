@@ -28,9 +28,13 @@ for migration in src/main/resources/db/migration/V{1..5}__*.sql; do
   "${database[@]}" < "$migration"
 done
 "${database[@]}" < src/test/resources/db/legacy-fixture.sql
-for migration in src/main/resources/db/migration/V{6..9}__*.sql; do
+for migration in src/main/resources/db/migration/V{6..8}__*.sql; do
   "${database[@]}" < "$migration"
 done
+
+[[ "$("${database[@]}" -e "SELECT COUNT(*) FROM workspace_operation")" == 4 ]]
+"${database[@]}" -e "UPDATE workspace_operation SET attempts=8, status='PENDING'"
+"${database[@]}" < src/main/resources/db/migration/V9__prepare_assignment_path_backfill.sql
 
 [[ "$("${database[@]}" -e "SELECT COUNT(*) FROM course WHERE environment_profile='ALGORITHM' AND resource_profile='STANDARD' AND workspace_scope='COURSE'")" == 1 ]]
 [[ "$("${database[@]}" -e "SELECT COUNT(*) FROM assignment WHERE workspace_key=CONCAT('assignment-', id) AND lifecycle_status='PROVISIONING'")" == 2 ]]
