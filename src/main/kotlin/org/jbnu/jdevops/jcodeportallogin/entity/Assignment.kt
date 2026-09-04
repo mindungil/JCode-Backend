@@ -28,7 +28,10 @@ enum class AssignmentPathBackfillStatus {
 }
 
 @Entity
-@Table(name = "assignment")
+@Table(
+    name = "assignment",
+    uniqueConstraints = [UniqueConstraint(name = "uk_assignment_course_name", columnNames = ["course_id", "name"])]
+)
 data class Assignment(
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     val id: Long = 0,

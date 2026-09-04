@@ -87,6 +87,26 @@ class WorkspaceOperationStoreTest {
         verify(operationRepository, times(1)).save(org.mockito.ArgumentMatchers.any(WorkspaceOperation::class.java))
     }
 
+    @Test
+    fun `readiness polling is deferred without consuming retry attempts`() {
+        val stored = operation(
+            12,
+            WorkspaceOperationTarget.JCODE,
+            4,
+            WorkspaceOperationAction.PROVISION_JCODE
+        ).also {
+            it.status = WorkspaceOperationStatus.PROCESSING
+            it.attempts = 1
+        }
+        `when`(operationRepository.findById(stored.id)).thenReturn(Optional.of(stored))
+
+        store.defer(claimed(stored))
+
+        assertEquals(WorkspaceOperationStatus.PENDING, stored.status)
+        assertEquals(0, stored.attempts)
+        assertEquals(null, stored.lockedAt)
+    }
+
     private fun claimed(operation: WorkspaceOperation) = ClaimedWorkspaceOperation(
         operation.id,
         operation.targetType,

@@ -273,6 +273,21 @@ class WorkspaceOperationStore(
     }
 
     @Transactional
+    fun defer(operation: ClaimedWorkspaceOperation, delaySeconds: Long = 3) {
+        val stored = operationRepository.findById(operation.id).orElseThrow()
+        if (stored.status != WorkspaceOperationStatus.PROCESSING) return
+        val now = LocalDateTime.now()
+        stored.status = WorkspaceOperationStatus.PENDING
+        // Readiness polling is not a failed attempt and must not exhaust max-attempts.
+        stored.attempts = (stored.attempts - 1).coerceAtLeast(0)
+        stored.nextAttemptAt = now.plusSeconds(delaySeconds)
+        stored.lockedAt = null
+        stored.lastError = null
+        stored.updatedAt = now
+        operationRepository.save(stored)
+    }
+
+    @Transactional
     fun retry(targetType: WorkspaceOperationTarget, targetId: Long): Boolean {
         if (operationRepository.existsByTargetTypeAndTargetIdAndStatusIn(targetType, targetId, active)) return false
         val operation = operationRepository.findTopByTargetTypeAndTargetIdAndStatusOrderByCreatedAtDesc(
