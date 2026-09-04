@@ -106,6 +106,7 @@ class RedirectController(
         else redisService.storeUserCourse(user.email, course.code, course.clss, jcodeUrl)
 
         // 과제별 폴더 경로 결정
+        var workspaceFile: String? = null
         val folderPath = if (!redirectRequest.snapshot && redirectRequest.assignmentId != null) {
             val assignment = assignmentRepository.findByIdAndCourseId(redirectRequest.assignmentId, course.id)
                 .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Assignment not found in course") }
@@ -117,6 +118,7 @@ class RedirectController(
             if (course.workspaceScope == org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceScope.ASSIGNMENT) {
                 "/home/coder/project"
             } else {
+                workspaceFile = "/home/coder/project/.jcode/${assignment.workspaceKey}.code-workspace"
                 "/home/coder/project/${assignment.workspaceKey}"
             }
         } else {
@@ -124,8 +126,10 @@ class RedirectController(
         }
 
         // Node.js 서버 URL에 인코딩된 UUID 파라미터만 포함하여 구성
-        val encodedFolder = URLEncoder.encode(folderPath, StandardCharsets.UTF_8.toString())
-        val finalNodeJsUrl = "$routerUrl?id=$encodedUUID&folder=$encodedFolder"
+        val targetParameter = if (workspaceFile != null) "workspace" else "folder"
+        val targetPath = workspaceFile ?: folderPath
+        val encodedTarget = URLEncoder.encode(targetPath, StandardCharsets.UTF_8.toString())
+        val finalNodeJsUrl = "$routerUrl?id=$encodedUUID&$targetParameter=$encodedTarget"
 
         // Keycloak Access Token을 HTTP-Only Secure 쿠키로 설정
         response.addCookie(jwtUtil.createJwtCookie("jcodeAt", token))

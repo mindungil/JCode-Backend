@@ -5,6 +5,7 @@ import jakarta.validation.constraints.Pattern
 import jakarta.validation.constraints.Size
 import org.jbnu.jdevops.jcodeportallogin.entity.CourseStatus
 import org.jbnu.jdevops.jcodeportallogin.entity.MembershipStatus
+import org.jbnu.jdevops.jcodeportallogin.entity.RoleType
 
 data class UserCoursesDto(
     val courseId: Long,
@@ -25,6 +26,7 @@ data class UserCoursesDto(
     val courseYear: Int,
     val courseTerm: Int,
     val courseClss: Int,
+    val courseRole: RoleType,
     val status: CourseStatus = CourseStatus.ACTIVE,
     val membershipStatus: MembershipStatus = MembershipStatus.READY,
     val membershipError: String? = null

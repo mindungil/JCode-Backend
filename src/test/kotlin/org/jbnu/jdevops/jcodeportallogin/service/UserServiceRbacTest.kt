@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.mockito.Mockito.any
+import org.mockito.ArgumentCaptor
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
@@ -125,6 +126,44 @@ class UserServiceRbacTest {
         }
 
         assertEquals(HttpStatus.CONFLICT, ex.statusCode)
+        verify(userCoursesRepository, never()).save(any(UserCourses::class.java))
+    }
+
+    @Test
+    fun `course key always enrolls user as course student`() {
+        val course = course()
+        val professor = user(2, "professor@example.com", RoleType.PROFESSOR)
+        val rawKey = "ALG-1-secret"
+
+        `when`(courseRepository.findByCodeAndClss(course.code, course.clss)).thenReturn(listOf(course))
+        `when`(passwordEncoder.matches(rawKey, course.courseKey)).thenReturn(true)
+        `when`(userRepository.findByEmail(professor.email)).thenReturn(professor)
+        `when`(userCoursesRepository.findByUserIdAndCourseId(professor.id, course.id)).thenReturn(null)
+
+        service.joinCourse(professor.email, rawKey)
+
+        val captor = ArgumentCaptor.forClass(UserCourses::class.java)
+        verify(userCoursesRepository).saveAndFlush(captor.capture())
+        assertEquals(RoleType.STUDENT, captor.value.role)
+        assertEquals(MembershipStatus.PROVISIONING, captor.value.lifecycleStatus)
+        verify(workspaceOperationStore).enqueue(
+            WorkspaceOperationTarget.MEMBERSHIP,
+            captor.value.id,
+            WorkspaceOperationAction.PROVISION_MEMBERSHIP
+        )
+    }
+
+    @Test
+    fun `global role update does not overwrite course memberships`() {
+        val admin = user(1, "admin@example.com", RoleType.ADMIN)
+        val target = user(2, "target@example.com", RoleType.STUDENT)
+        `when`(userRepository.findByEmail(admin.email)).thenReturn(admin)
+        `when`(userRepository.findById(target.id)).thenReturn(target)
+
+        service.updateUserRole(admin.email, target.id, RoleType.PROFESSOR, null)
+
+        assertEquals(RoleType.PROFESSOR, target.role)
+        verify(userRepository).save(target)
         verify(userCoursesRepository, never()).save(any(UserCourses::class.java))
     }
 

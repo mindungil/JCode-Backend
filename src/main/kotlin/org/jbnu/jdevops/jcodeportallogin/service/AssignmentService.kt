@@ -163,6 +163,9 @@ class AssignmentService(
             updatedAt = LocalDateTime.now()
         )
         val saved = assignmentRepository.save(updated)
+        workspaceOperationStore.enqueue(
+            WorkspaceOperationTarget.ASSIGNMENT, saved.id, WorkspaceOperationAction.UPDATE_ASSIGNMENT_METADATA
+        )
         if (assignment.scheduleStatus != AssignmentScheduleStatus.CLOSED && requestedSchedule == AssignmentScheduleStatus.CLOSED) {
             closeAssignmentJcodes(saved.id)
             workspaceOperationStore.enqueue(

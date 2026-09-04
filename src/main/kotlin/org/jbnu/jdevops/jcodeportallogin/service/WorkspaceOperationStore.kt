@@ -126,6 +126,14 @@ class WorkspaceOperationStore(
         }
         .map { it.workspaceKey }
 
+    @Transactional(readOnly = true)
+    fun loadActiveAssignmentLabels(courseId: Long): Map<String, String> = assignmentRepository.findByCourseId(courseId)
+        .filter {
+            it.lifecycleStatus == AssignmentLifecycleStatus.ACTIVE &&
+                it.scheduleStatus in setOf(AssignmentScheduleStatus.SCHEDULED, AssignmentScheduleStatus.OPEN)
+        }
+        .associate { it.workspaceKey to it.name }
+
     @Transactional
     fun markSucceeded(operation: ClaimedWorkspaceOperation, result: Map<*, *>? = null) {
         val stored = operationRepository.findById(operation.id).orElseThrow()
@@ -138,6 +146,11 @@ class WorkspaceOperationStore(
                     it.updatedAt = LocalDateTime.now()
                     assignmentRepository.save(it)
                 }
+            }
+            WorkspaceOperationAction.UPDATE_ASSIGNMENT_METADATA -> assignmentRepository.findById(operation.targetId).ifPresent {
+                it.lastError = null
+                it.updatedAt = LocalDateTime.now()
+                assignmentRepository.save(it)
             }
             WorkspaceOperationAction.RESTORE_ASSIGNMENT -> assignmentRepository.findById(operation.targetId).ifPresent {
                 it.lifecycleStatus = AssignmentLifecycleStatus.ACTIVE

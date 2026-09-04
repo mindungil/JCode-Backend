@@ -70,8 +70,23 @@ class WorkspaceReconciler(
                     "course_id" to course.id,
                     "namespace" to namespace,
                     "workspace_key" to assignment.workspaceKey,
-                    "legacy_dir_name" to assignment.legacyDirName
+                    "legacy_dir_name" to assignment.legacyDirName,
+                    "display_name" to assignment.name
                 )
+                )
+            }
+            WorkspaceOperationAction.UPDATE_ASSIGNMENT_METADATA -> {
+                if (assignment.lifecycleStatus != AssignmentLifecycleStatus.ACTIVE) return skipped
+                return post(
+                    "/api/workspace/assignments/provision",
+                    "workspace:write",
+                    operation.idempotencyKey,
+                    mapOf(
+                        "course_id" to course.id,
+                        "namespace" to namespace,
+                        "workspace_key" to assignment.workspaceKey,
+                        "display_name" to assignment.name
+                    )
                 )
             }
             WorkspaceOperationAction.DISTRIBUTE_STARTER -> {
@@ -109,6 +124,7 @@ class WorkspaceReconciler(
                     "course_id" to course.id,
                     "namespace" to namespace,
                     "workspace_key" to assignment.workspaceKey,
+                    "display_name" to assignment.name,
                     "retention_days" to assignment.archiveRetentionDays,
                     "deployments" to jcodes.map { it.first },
                     "services" to jcodes.map { it.second }
@@ -128,6 +144,7 @@ class WorkspaceReconciler(
                     "course_id" to course.id,
                     "namespace" to namespace,
                     "workspace_key" to assignment.workspaceKey,
+                    "display_name" to assignment.name,
                     "retention_days" to assignment.archiveRetentionDays,
                     "deployments" to jcodes.map { it.first },
                     "services" to jcodes.map { it.second }
@@ -146,6 +163,7 @@ class WorkspaceReconciler(
                     "course_id" to course.id,
                     "namespace" to namespace,
                     "workspace_key" to assignment.workspaceKey,
+                    "display_name" to assignment.name,
                     "retention_days" to assignment.archiveRetentionDays,
                     "starter_artifact_key" to starter?.artifactKey,
                     "starter_checksum" to starter?.checksum,
@@ -172,6 +190,7 @@ class WorkspaceReconciler(
                     "namespace" to namespace,
                     "student_num" to membership.user.studentNum.toString(),
                     "workspace_keys" to operationStore.loadActiveAssignmentKeys(course.id),
+                    "workspace_labels" to operationStore.loadActiveAssignmentLabels(course.id),
                     "artifacts" to operationStore.loadLatestCourseArtifacts(course.id).map {
                         mapOf(
                             "workspace_key" to it.assignment.workspaceKey,

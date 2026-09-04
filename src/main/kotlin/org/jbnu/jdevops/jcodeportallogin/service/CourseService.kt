@@ -134,6 +134,14 @@ class CourseService(
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "해당 강의의 담당 교수 권한이 없습니다.")
         }
     }
+
+    private fun requireCourseRole(courseId: Long, email: String): RoleType {
+        val user = userRepository.findByEmail(email)
+            ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Current user not found")
+        if (user.role == RoleType.ADMIN) return RoleType.ADMIN
+        return userCoursesRepository.findByUserIdAndCourseId(user.id, courseId)?.role
+            ?: throw ResponseStatusException(HttpStatus.FORBIDDEN, "해당 강의에 소속되어 있지 않습니다.")
+    }
     // 강의별 유저 조회
     @Transactional(readOnly = true)
     fun getUsersByCourse(email: String, courseId: Long): List<UserInfoDto> {
@@ -170,7 +178,8 @@ class CourseService(
 
     // 강의별 과제 조회
     @Transactional(readOnly = true)
-    fun getAssignmentsByCourse(courseId: Long): List<AssignmentDto> {
+    fun getAssignmentsByCourse(courseId: Long, email: String): List<AssignmentDto> {
+        requireCourseRole(courseId, email)
         val assignments = assignmentRepository.findByCourseId(courseId)
 
         if (assignments.isEmpty()) return emptyList()
@@ -451,7 +460,8 @@ class CourseService(
 
     // 관리자용 강의 상세 정보 조회
     @Transactional(readOnly = true)
-    fun getCourseDetails(courseId: Long): UserCourseDetailsDto {
+    fun getCourseDetails(courseId: Long, email: String): UserCourseDetailsDto {
+        val courseRole = requireCourseRole(courseId, email)
         val course = courseRepository.findById(courseId)
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
 
@@ -500,6 +510,7 @@ class CourseService(
             status = course.status,
             environmentProfile = course.environmentProfile,
             workspaceScope = course.workspaceScope,
+            courseRole = courseRole,
             assignments = assignments,
             jcodeUrl = null // 관리자는 JCode URL이 필요 없음
         )
