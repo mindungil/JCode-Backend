@@ -1,6 +1,7 @@
 package org.jbnu.jdevops.jcodeportallogin.service
 
 import org.springframework.data.redis.core.StringRedisTemplate
+import org.springframework.data.redis.core.script.DefaultRedisScript
 import org.springframework.stereotype.Service
 import java.util.concurrent.TimeUnit
 import java.util.UUID
@@ -65,6 +66,12 @@ class RedisService(
     fun removeUserFromCourseManagerList(courseCode: String, courseClss: Int, email: String) {
         val key = "course:$courseCode:$courseClss:managers"
         redisTemplate.opsForSet().remove(key, email)
+    }
+
+    fun replaceCourseManagers(courseCode: String, courseClss: Int, emails: Collection<String>) {
+        val key = "course:$courseCode:$courseClss:managers"
+        val members = emails.filter(String::isNotBlank).distinct().sorted()
+        redisTemplate.execute(REPLACE_SET_SCRIPT, listOf(key), *members.toTypedArray())
     }
 
     // id_token을 하나의 Redis 해시로 저장 (key: "user:id_tokens", field: 이메일, value: id_token)
@@ -134,5 +141,18 @@ class RedisService(
         redisTemplate.expire(key, 6, TimeUnit.HOURS)
 
         return id
+    }
+
+    companion object {
+        private val REPLACE_SET_SCRIPT = DefaultRedisScript(
+            """
+            redis.call('DEL', KEYS[1])
+            if #ARGV == 0 then
+                return 0
+            end
+            return redis.call('SADD', KEYS[1], unpack(ARGV))
+            """.trimIndent(),
+            Long::class.java
+        )
     }
 }

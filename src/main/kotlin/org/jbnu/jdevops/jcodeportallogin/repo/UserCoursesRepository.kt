@@ -1,5 +1,7 @@
 package org.jbnu.jdevops.jcodeportallogin.repo
 
+import org.jbnu.jdevops.jcodeportallogin.entity.CourseStatus
+import org.jbnu.jdevops.jcodeportallogin.entity.MembershipStatus
 import org.jbnu.jdevops.jcodeportallogin.entity.RoleType
 import org.jbnu.jdevops.jcodeportallogin.entity.UserCourses
 import org.springframework.data.jpa.repository.JpaRepository
@@ -22,4 +24,21 @@ interface UserCoursesRepository : JpaRepository<UserCourses, Long> {
     fun existsByCourseIdAndUserIdAndRole(courseId: Long, userId: Long, role: RoleType): Boolean
     fun findByUserStudentNumAndCourseId(studentNum: Int, courseId: Long): UserCourses?
     fun findByCourseIdAndRole(courseId: Long, role: RoleType): List<UserCourses>
+
+    @Query(
+        """
+        select membership
+        from UserCourses membership
+        join fetch membership.user
+        join fetch membership.course
+        where membership.role in :roles
+          and membership.lifecycleStatus = :membershipStatus
+          and membership.course.status = :courseStatus
+        """
+    )
+    fun findActiveCourseManagers(
+        roles: Collection<RoleType>,
+        membershipStatus: MembershipStatus,
+        courseStatus: CourseStatus
+    ): List<UserCourses>
 }
