@@ -119,7 +119,8 @@ class RedirectController(
             if (course.workspaceScope == org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceScope.ASSIGNMENT) {
                 "/home/coder/project"
             } else {
-                workspaceFile = "/home/coder/project/.jcode/${assignment.workspaceKey}.code-workspace"
+                val assignmentWorkspaceFile = WorkspaceNaming.assignmentWorkspaceFile(assignment.name)
+                workspaceFile = "/home/coder/project/.jcode/assignments/${assignment.workspaceKey}/$assignmentWorkspaceFile"
                 "/home/coder/project/${assignment.workspaceKey}"
             }
         } else {

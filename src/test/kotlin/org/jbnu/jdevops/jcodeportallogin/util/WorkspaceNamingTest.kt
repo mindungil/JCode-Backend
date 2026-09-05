@@ -31,4 +31,10 @@ class WorkspaceNamingTest {
         assertThat(WorkspaceNaming.generalWorkspaceFile(user))
             .isEqualTo("student의 JCode.code-workspace")
     }
+
+    @Test
+    fun `uses the assignment name without exposing its storage key`() {
+        assertThat(WorkspaceNaming.assignmentWorkspaceFile("정렬/검색"))
+            .isEqualTo("정렬_검색.code-workspace")
+    }
 }

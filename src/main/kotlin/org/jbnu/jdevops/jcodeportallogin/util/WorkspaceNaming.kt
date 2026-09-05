@@ -16,4 +16,11 @@ object WorkspaceNaming {
     }
 
     fun generalWorkspaceFile(user: User): String = "${displayName(user)}$GENERAL_WORKSPACE_SUFFIX"
+
+    fun assignmentWorkspaceFile(assignmentName: String): String {
+        val safeName = unsafeFilenameCharacters.replace(
+            assignmentName.trim().filterNot(Char::isISOControl), "_"
+        ).trim().trim('.').take(50).ifEmpty { "과제" }
+        return "$safeName.code-workspace"
+    }
 }
