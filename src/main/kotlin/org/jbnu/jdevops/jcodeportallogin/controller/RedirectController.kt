@@ -14,6 +14,7 @@ import org.jbnu.jdevops.jcodeportallogin.repo.UserRepository
 import org.jbnu.jdevops.jcodeportallogin.service.RedisService
 import org.jbnu.jdevops.jcodeportallogin.util.AuthorizationUtil
 import org.jbnu.jdevops.jcodeportallogin.util.JwtUtil
+import org.jbnu.jdevops.jcodeportallogin.util.WorkspaceNaming
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
@@ -123,7 +124,7 @@ class RedirectController(
             }
         } else {
             if (!redirectRequest.snapshot && course.workspaceScope == org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceScope.COURSE) {
-                workspaceFile = "/home/coder/project/.jcode/jcode.code-workspace"
+                workspaceFile = "/home/coder/project/.jcode/${WorkspaceNaming.generalWorkspaceFile(user)}"
             }
             "/home/coder/project"
         }

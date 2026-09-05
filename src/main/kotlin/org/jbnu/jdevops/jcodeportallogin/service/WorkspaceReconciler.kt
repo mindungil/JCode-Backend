@@ -2,6 +2,7 @@ package org.jbnu.jdevops.jcodeportallogin.service
 
 import org.jbnu.jdevops.jcodeportallogin.config.GENERATOR_SCOPE_ATTRIBUTE
 import org.jbnu.jdevops.jcodeportallogin.entity.*
+import org.jbnu.jdevops.jcodeportallogin.util.WorkspaceNaming
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.beans.factory.annotation.Value
@@ -22,13 +23,6 @@ class WorkspaceReconciler(
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val skipped = mapOf("_skipStateUpdate" to true)
-
-    private fun workspaceDisplayName(user: User): String {
-        val preferred = user.name?.trim()?.takeIf { it.isNotEmpty() }
-            ?: user.email.substringBefore('@').trim()
-        return preferred.filterNot(Char::isISOControl).take(100)
-            .ifEmpty { user.studentNum?.toString() ?: "JCode" }
-    }
 
     @Scheduled(
         fixedDelayString = "\${workspace.lifecycle.reconcile-delay-ms:3000}",
@@ -196,7 +190,7 @@ class WorkspaceReconciler(
                     "course_id" to course.id,
                     "namespace" to namespace,
                     "student_num" to membership.user.studentNum.toString(),
-                    "display_name" to workspaceDisplayName(membership.user),
+                    "display_name" to WorkspaceNaming.displayName(membership.user),
                     "workspace_keys" to operationStore.loadActiveAssignmentKeys(course.id),
                     "workspace_labels" to operationStore.loadActiveAssignmentLabels(course.id),
                     "artifacts" to operationStore.loadLatestCourseArtifacts(course.id).map {
@@ -261,7 +255,7 @@ class WorkspaceReconciler(
                         "egress_policy" to course.egressPolicy.name,
                         "workspace_scope" to course.workspaceScope.name,
                         "assignment_workspace_key" to jcode.assignment?.workspaceKey,
-                        "workspace_display_name" to workspaceDisplayName(jcode.user),
+                        "workspace_display_name" to WorkspaceNaming.displayName(jcode.user),
                         "use_snapshot" to jcode.snapshot,
                         "hw_count" to course.hwCount,
                         "prac_count" to if (course.pracEnabled) course.pracCount else 0,
