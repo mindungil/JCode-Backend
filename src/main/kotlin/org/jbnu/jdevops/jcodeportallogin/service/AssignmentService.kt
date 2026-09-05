@@ -306,8 +306,10 @@ class AssignmentService(
     @Transactional
     fun refreshScheduleStatuses() {
         val now = LocalDateTime.now()
-        assignmentRepository.findAll().forEach { assignment ->
-            if (assignment.lifecycleStatus in setOf(AssignmentLifecycleStatus.DELETING, AssignmentLifecycleStatus.ARCHIVED)) return@forEach
+        assignmentRepository.findSchedulableForUpdate(
+            CourseStatus.ACTIVE,
+            AssignmentLifecycleStatus.ACTIVE
+        ).forEach { assignment ->
             val expected = when {
                 now.isBefore(assignment.kickoffDate) -> AssignmentScheduleStatus.SCHEDULED
                 now.isAfter(assignment.deadlineDate) -> AssignmentScheduleStatus.CLOSED

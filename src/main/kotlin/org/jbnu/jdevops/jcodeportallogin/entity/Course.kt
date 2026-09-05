@@ -71,7 +71,7 @@ data class Course(
     val workspaceScope: WorkspaceScope = WorkspaceScope.COURSE,
 
     @Column(nullable = false)
-    val hwCount: Int = 10,
+    val hwCount: Int = 0,
 
     @Column(nullable = false)
     val pracEnabled: Boolean = false,

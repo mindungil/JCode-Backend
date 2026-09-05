@@ -122,6 +122,9 @@ class RedirectController(
                 "/home/coder/project/${assignment.workspaceKey}"
             }
         } else {
+            if (!redirectRequest.snapshot && course.workspaceScope == org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceScope.COURSE) {
+                workspaceFile = "/home/coder/project/.jcode/jcode.code-workspace"
+            }
             "/home/coder/project"
         }
 

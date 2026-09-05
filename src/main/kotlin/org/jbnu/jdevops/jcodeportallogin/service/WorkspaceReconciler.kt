@@ -23,6 +23,13 @@ class WorkspaceReconciler(
     private val logger = LoggerFactory.getLogger(javaClass)
     private val skipped = mapOf("_skipStateUpdate" to true)
 
+    private fun workspaceDisplayName(user: User): String {
+        val preferred = user.name?.trim()?.takeIf { it.isNotEmpty() }
+            ?: user.email.substringBefore('@').trim()
+        return preferred.filterNot(Char::isISOControl).take(100)
+            .ifEmpty { user.studentNum?.toString() ?: "JCode" }
+    }
+
     @Scheduled(
         fixedDelayString = "\${workspace.lifecycle.reconcile-delay-ms:3000}",
         initialDelayString = "\${workspace.lifecycle.initial-delay-ms:10000}"
@@ -189,6 +196,7 @@ class WorkspaceReconciler(
                     "course_id" to course.id,
                     "namespace" to namespace,
                     "student_num" to membership.user.studentNum.toString(),
+                    "display_name" to workspaceDisplayName(membership.user),
                     "workspace_keys" to operationStore.loadActiveAssignmentKeys(course.id),
                     "workspace_labels" to operationStore.loadActiveAssignmentLabels(course.id),
                     "artifacts" to operationStore.loadLatestCourseArtifacts(course.id).map {
@@ -253,12 +261,16 @@ class WorkspaceReconciler(
                         "egress_policy" to course.egressPolicy.name,
                         "workspace_scope" to course.workspaceScope.name,
                         "assignment_workspace_key" to jcode.assignment?.workspaceKey,
+                        "workspace_display_name" to workspaceDisplayName(jcode.user),
                         "use_snapshot" to jcode.snapshot,
                         "hw_count" to course.hwCount,
                         "prac_count" to if (course.pracEnabled) course.pracCount else 0,
                         "assignment_dirs" to if (course.workspaceScope == WorkspaceScope.COURSE) {
                             operationStore.loadActiveAssignmentKeys(course.id)
-                        } else emptyList<String>()
+                        } else emptyList<String>(),
+                        "assignment_labels" to if (course.workspaceScope == WorkspaceScope.COURSE) {
+                            operationStore.loadActiveAssignmentLabels(course.id)
+                        } else emptyMap<String, String>()
                     )
                 )
                 val readiness = getJcodeReadiness(

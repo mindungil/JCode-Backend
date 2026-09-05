@@ -2,6 +2,9 @@ package org.jbnu.jdevops.jcodeportallogin.service
 
 import org.jbnu.jdevops.jcodeportallogin.entity.Assignment
 import org.jbnu.jdevops.jcodeportallogin.entity.Course
+import org.jbnu.jdevops.jcodeportallogin.entity.CourseStatus
+import org.jbnu.jdevops.jcodeportallogin.entity.AssignmentLifecycleStatus
+import org.jbnu.jdevops.jcodeportallogin.entity.AssignmentScheduleStatus
 import org.jbnu.jdevops.jcodeportallogin.entity.RoleType
 import org.jbnu.jdevops.jcodeportallogin.entity.User
 import org.jbnu.jdevops.jcodeportallogin.entity.UserCourses
@@ -125,6 +128,26 @@ class AssignmentServiceRbacTest {
         assertEquals("new title", result.assignmentName)
         assertEquals("old-dir", result.dirName)
         assert(result.updatedAt != assignment.updatedAt.toString())
+    }
+
+    @Test
+    fun `schedule refresh only requests assignments from active courses`() {
+        val assignment = assignment(100, course(10), "title", "assignment-100").also {
+            it.lifecycleStatus = AssignmentLifecycleStatus.ACTIVE
+            it.scheduleStatus = AssignmentScheduleStatus.OPEN
+        }
+        `when`(assignmentRepository.findSchedulableForUpdate(CourseStatus.ACTIVE, AssignmentLifecycleStatus.ACTIVE))
+            .thenReturn(listOf(assignment))
+
+        service.refreshScheduleStatuses()
+
+        verify(assignmentRepository).findSchedulableForUpdate(CourseStatus.ACTIVE, AssignmentLifecycleStatus.ACTIVE)
+        assertEquals(AssignmentScheduleStatus.CLOSED, assignment.scheduleStatus)
+        verify(workspaceOperationStore).enqueue(
+            org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceOperationTarget.ASSIGNMENT,
+            assignment.id,
+            org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceOperationAction.ARCHIVE_FINAL_SUBMISSION
+        )
     }
 
     private fun course(id: Long) = Course(

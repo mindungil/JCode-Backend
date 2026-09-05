@@ -47,7 +47,7 @@ data class CourseDto(
     val workspaceScope: WorkspaceScope? = null,
     @field:Min(0)
     @field:Max(100)
-    val hwCount: Int = 10,
+    val hwCount: Int = 0,
     val pracEnabled: Boolean = false,
     @field:Min(0)
     @field:Max(10)

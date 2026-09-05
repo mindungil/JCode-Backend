@@ -169,11 +169,18 @@ class WorkspaceOperationStore(
                     assignmentRepository.save(artifact.assignment)
                 } }
             }
-            WorkspaceOperationAction.ARCHIVE_FINAL_SUBMISSION -> assignmentRepository.findById(operation.targetId).ifPresent {
-                if (it.lifecycleStatus == AssignmentLifecycleStatus.ACTIVE && it.scheduleStatus == AssignmentScheduleStatus.CLOSED) {
-                    it.finalizedAt = LocalDateTime.now()
-                    it.lastError = null
-                    assignmentRepository.save(it)
+            WorkspaceOperationAction.ARCHIVE_FINAL_SUBMISSION -> {
+                val assignment = assignmentRepository.findById(operation.targetId)
+                    .orElseThrow { IllegalStateException("최종 보관 대상 과제를 찾을 수 없습니다.") }
+                if (assignment.finalizedAt == null) {
+                    if (assignment.lifecycleStatus != AssignmentLifecycleStatus.ACTIVE ||
+                        assignment.scheduleStatus != AssignmentScheduleStatus.CLOSED
+                    ) {
+                        throw IllegalStateException("닫힌 ACTIVE 과제만 최종 보관 완료 처리할 수 있습니다.")
+                    }
+                    assignment.finalizedAt = LocalDateTime.now()
+                    assignment.lastError = null
+                    assignmentRepository.save(assignment)
                 }
             }
             WorkspaceOperationAction.ARCHIVE_ASSIGNMENT -> assignmentRepository.findById(operation.targetId).ifPresent {
