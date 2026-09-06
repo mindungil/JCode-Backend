@@ -19,6 +19,7 @@ import org.jbnu.jdevops.jcodeportallogin.entity.AssignmentScheduleStatus
 import org.jbnu.jdevops.jcodeportallogin.entity.JcodeLifecycleStatus
 import org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceOperationAction
 import org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceOperationTarget
+import org.jbnu.jdevops.jcodeportallogin.entity.User
 import org.jbnu.jdevops.jcodeportallogin.repo.AssignmentRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.CourseRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.UserCoursesRepository
@@ -33,6 +34,7 @@ import org.springframework.http.HttpStatus
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.transaction.annotation.Transactional
 import java.time.LocalDateTime
+import java.util.UUID
 
 @Service
 class CourseService(
@@ -58,6 +60,8 @@ class CourseService(
         val egressPolicy: WorkspaceEgressPolicy,
         val workspaceScope: WorkspaceScope
     )
+
+    private data class InfrastructureIdentity(val key: String, val namespace: String)
 
     private fun resolveWorkspaceProfile(dto: CourseDto): ResolvedWorkspaceProfile {
         val type = dto.environmentProfile
@@ -100,7 +104,6 @@ class CourseService(
     private fun Course.toDto(courseKeyValue: String? = null): CourseDto = CourseDto(
         courseId = id,
         name = name,
-        code = code,
         professor = professor,
         clss = clss,
         year = year,
@@ -123,16 +126,44 @@ class CourseService(
         courseKey = courseKeyValue
     )
 
-    private fun validateCourseManagementAuthority(courseId: Long, email: String) {
+    private fun validateCourseManagementAuthority(courseId: Long, email: String): User {
         val user = userRepository.findByEmail(email)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Current user not found")
         if (user.role == RoleType.ADMIN) {
-            return
+            return user
         }
         val membership = userCoursesRepository.findByUserIdAndCourseId(user.id, courseId)
         if (membership?.role != RoleType.PROFESSOR) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "해당 강의의 담당 교수 권한이 없습니다.")
         }
+        return user
+    }
+
+    private fun allocateInfrastructureIdentity(clss: Int): InfrastructureIdentity {
+        repeat(5) {
+            val key = UUID.randomUUID().toString().replace("-", "").take(12)
+            val namespace = Course.namespaceKey(key, clss)
+            if (!courseRepository.existsByNamespaceKey(namespace)) {
+                return InfrastructureIdentity(key, namespace)
+            }
+        }
+        throw ResponseStatusException(
+            HttpStatus.SERVICE_UNAVAILABLE,
+            "강의 환경 식별자를 생성하지 못했습니다. 잠시 후 다시 시도해주세요."
+        )
+    }
+
+    private fun resolveProfessorName(courseDto: CourseDto, creator: User): String {
+        val name = if (creator.role == RoleType.PROFESSOR) creator.name else courseDto.professor
+        return name?.trim()?.takeIf { it.isNotEmpty() }
+            ?: throw ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                if (creator.role == RoleType.PROFESSOR) {
+                    "강의를 개설하려면 먼저 프로필 이름을 등록해주세요."
+                } else {
+                    "담당 교수명을 입력해주세요."
+                }
+            )
     }
 
     private fun requireCourseRole(courseId: Long, email: String): RoleType {
@@ -223,7 +254,7 @@ class CourseService(
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
 
         // 새 원본 key 생성
-        val newRawKey = courseKeyUtil.generateCourseEnrollmentCode(course.code, course.clss)
+        val newRawKey = courseKeyUtil.generateCourseEnrollmentCode(course.infrastructureKey, course.clss)
 
         // 암호화하여 업데이트
         val newEncryptedKey = passwordEncoder.encode(newRawKey)
@@ -237,24 +268,24 @@ class CourseService(
     @Transactional
     fun createCourse(courseDto: CourseDto, creatorEmail: String): CourseDto {
         val profile = resolveWorkspaceProfile(courseDto)
-        val namespaceKey = Course.namespaceKey(courseDto.code, courseDto.clss)
-        if (courseRepository.existsByNamespaceKey(namespaceKey)) {
-            throw ResponseStatusException(
-                HttpStatus.CONFLICT,
-                "같은 강의 코드와 분반의 강의가 이미 존재합니다. 기존 강의 상태를 확인해주세요."
-            )
+        val creator = userRepository.findByEmail(creatorEmail)
+            ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Course creator not found")
+        if (creator.role !in setOf(RoleType.ADMIN, RoleType.PROFESSOR)) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "강의 개설 권한이 없습니다.")
         }
+        val professorName = resolveProfessorName(courseDto, creator)
+        val identity = allocateInfrastructureIdentity(courseDto.clss)
         // 랜덤 key를 생성하여 할당
-        val rawKey = courseKeyUtil.generateCourseEnrollmentCode(courseDto.code, courseDto.clss)
+        val rawKey = courseKeyUtil.generateCourseEnrollmentCode(identity.key, courseDto.clss)
         // PasswordEncoder를 사용해 암호화 (해싱) 처리
         val encryptedKey = passwordEncoder.encode(rawKey)
 
         val course = courseRepository.save(Course(
             name = courseDto.name,
-            code = courseDto.code,
-            professor = courseDto.professor,
+            infrastructureKey = identity.key,
+            professor = professorName,
             clss = courseDto.clss,
-            namespaceKey = namespaceKey,
+            namespaceKey = identity.namespace,
             year = courseDto.year,
             term = courseDto.term,
             vnc = profile.useVnc,
@@ -272,10 +303,8 @@ class CourseService(
             status = CourseStatus.PROVISIONING
         ))
 
-        val creator = userRepository.findByEmail(creatorEmail)
-            ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Course creator not found")
         userCoursesRepository.save(
-            UserCourses(course = course, user = creator, role = RoleType.PROFESSOR, lifecycleStatus = MembershipStatus.READY)
+            UserCourses(course = course, user = creator, role = creator.role, lifecycleStatus = MembershipStatus.READY)
         )
 
         infrastructureOperationStore.enqueue(course.id, CourseInfrastructureAction.PROVISION_NAMESPACE)
@@ -286,12 +315,12 @@ class CourseService(
     // 강의 수정
     @Transactional
     fun updateCourse(courseId: Long, courseDto: CourseDto, email: String): CourseDto {
-        validateCourseManagementAuthority(courseId, email)
+        val actor = validateCourseManagementAuthority(courseId, email)
         val course = courseRepository.findById(courseId)
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
 
         val requestedProfile = resolveWorkspaceProfile(courseDto)
-        if (course.code != courseDto.code || course.clss != courseDto.clss ||
+        if (course.clss != courseDto.clss ||
             course.environmentProfile != requestedProfile.type || course.useVnc != requestedProfile.useVnc ||
             course.useJupyter != requestedProfile.useJupyter || course.baseImage != requestedProfile.baseImage ||
             course.resourceProfile != requestedProfile.resourceProfile || course.egressPolicy != requestedProfile.egressPolicy ||
@@ -299,7 +328,7 @@ class CourseService(
         ) {
             throw ResponseStatusException(
                 HttpStatus.CONFLICT,
-                "강의 코드, 분반, 환경 프로필은 생성 후 변경할 수 없습니다."
+                "분반과 환경 프로필은 생성 후 변경할 수 없습니다."
             )
         }
 
@@ -307,12 +336,17 @@ class CourseService(
             name = courseDto.name,
             year = courseDto.year,
             term = courseDto.term,
-            professor = courseDto.professor,
+            professor = if (actor.role == RoleType.ADMIN) {
+                courseDto.professor?.trim()?.takeIf { it.isNotEmpty() } ?: course.professor
+            } else {
+                resolveProfessorName(courseDto, actor)
+            },
             hwCount = courseDto.hwCount,
             pracEnabled = courseDto.pracEnabled,
             pracCount = courseDto.pracCount
         )
         courseRepository.save(updatedCourse)
+        infrastructureOperationStore.enqueue(course.id, CourseInfrastructureAction.SYNC_NAMESPACE_METADATA)
         return updatedCourse.toDto()
     }
 
@@ -443,7 +477,7 @@ class CourseService(
         if (course.namespaceKey == null) {
             throw ResponseStatusException(
                 HttpStatus.CONFLICT,
-                "같은 강의 코드와 분반을 사용하는 기존 강의가 있어 재시도할 수 없습니다. 이 항목을 취소해주세요."
+                "강의 환경 식별자가 없어 재시도할 수 없습니다. 이 항목을 취소해주세요."
             )
         }
         if (!infrastructureOperationStore.retryFailed(courseId)) {
@@ -499,7 +533,6 @@ class CourseService(
         return UserCourseDetailsDto(
             courseId = course.id,
             courseName = course.name,
-            courseCode = course.code,
             courseProfessor = course.professor,
             courseYear = course.year,
             courseTerm = course.term,

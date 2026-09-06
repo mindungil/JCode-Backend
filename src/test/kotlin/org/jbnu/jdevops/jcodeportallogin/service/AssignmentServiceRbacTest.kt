@@ -153,7 +153,7 @@ class AssignmentServiceRbacTest {
     private fun course(id: Long) = Course(
         id = id,
         name = "Algorithms",
-        code = "ALG",
+        infrastructureKey = "ALG",
         year = 2026,
         term = 1,
         professor = "Professor",

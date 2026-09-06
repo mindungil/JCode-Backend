@@ -27,49 +27,49 @@ class RedisService(
     }
 
     // JCode URL을 Redis에서 가져오기
-    fun getJcodeUrl(courseCode: String): String? {
-        return redisTemplate.opsForValue().get("course:$courseCode:jcode-url")
+    fun getJcodeUrl(infrastructureKey: String): String? {
+        return redisTemplate.opsForValue().get("course:$infrastructureKey:jcode-url")
     }
 
     // 이메일 & 강의코드 & 분반 → JCode URL 저장
-    fun storeUserCourse(email: String, courseCode: String, courseClss: Int, jcodeUrl: String) {
-        val key = "user:$email:course:$courseCode:$courseClss"
+    fun storeUserCourse(email: String, infrastructureKey: String, courseClss: Int, jcodeUrl: String) {
+        val key = "user:$email:course:$infrastructureKey:$courseClss"
         redisTemplate.opsForValue().set(key, jcodeUrl, 180, TimeUnit.DAYS) // 유효기간 6개월 (약 180일)
     }
 
     // 이메일 & 강의코드 & 분반 → JCode URL 저장
-    fun storeSnapshotUserCourse(email: String, courseCode: String, courseClss: Int, jcodeUrl: String) {
-        val key = "user:$email:course:$courseCode:$courseClss:snapshot"
+    fun storeSnapshotUserCourse(email: String, infrastructureKey: String, courseClss: Int, jcodeUrl: String) {
+        val key = "user:$email:course:$infrastructureKey:$courseClss:snapshot"
         redisTemplate.opsForValue().set(key, jcodeUrl, 180, TimeUnit.DAYS) // 유효기간 6개월 (약 180일)
     }
 
     // 이메일 & 강의코드 & 분반 → 일반·스냅샷 JCode URL을 함께 삭제
-    fun deleteUserCourseAccess(email: String, courseCode: String, courseClss: Int) {
-        val baseKey = "user:$email:course:$courseCode:$courseClss"
+    fun deleteUserCourseAccess(email: String, infrastructureKey: String, courseClss: Int) {
+        val baseKey = "user:$email:course:$infrastructureKey:$courseClss"
         redisTemplate.delete(baseKey)
         redisTemplate.delete("$baseKey:snapshot")
     }
 
     // 강의 관리자 목록에 특정 사용자가 있는지 확인
-    fun isUserInCourseManagers(courseCode: String, courseClss: Int, email: String): Boolean {
-        val key = "course:$courseCode:$courseClss:managers"
+    fun isUserInCourseManagers(infrastructureKey: String, courseClss: Int, email: String): Boolean {
+        val key = "course:$infrastructureKey:$courseClss:managers"
         return redisTemplate.opsForSet().isMember(key, email) ?: false
     }
 
     // 강의 관리자 목록에 유저 추가
-    fun addUserToCourseManagerList(courseCode: String, courseClss: Int, email: String) {
-        val key = "course:$courseCode:$courseClss:managers"
+    fun addUserToCourseManagerList(infrastructureKey: String, courseClss: Int, email: String) {
+        val key = "course:$infrastructureKey:$courseClss:managers"
         redisTemplate.opsForSet().add(key, email)
     }
 
     // 강의 관리자 목록에서 특정 유저 제거
-    fun removeUserFromCourseManagerList(courseCode: String, courseClss: Int, email: String) {
-        val key = "course:$courseCode:$courseClss:managers"
+    fun removeUserFromCourseManagerList(infrastructureKey: String, courseClss: Int, email: String) {
+        val key = "course:$infrastructureKey:$courseClss:managers"
         redisTemplate.opsForSet().remove(key, email)
     }
 
-    fun replaceCourseManagers(courseCode: String, courseClss: Int, emails: Collection<String>) {
-        val key = "course:$courseCode:$courseClss:managers"
+    fun replaceCourseManagers(infrastructureKey: String, courseClss: Int, emails: Collection<String>) {
+        val key = "course:$infrastructureKey:$courseClss:managers"
         val members = emails.filter(String::isNotBlank).distinct().sorted()
         redisTemplate.execute(REPLACE_SET_SCRIPT, listOf(key), *members.toTypedArray())
     }
@@ -121,7 +121,7 @@ class RedisService(
     }
 
     // 사용자 정보를 하나의 해시로 저장 (키: "user:profile:<UUID>")
-    fun storeUserProfile(email: String, studentNumber: String, courseCode: String, clss: String, snapshot: String): String {
+    fun storeUserProfile(email: String, studentNumber: String, infrastructureKey: String, clss: String, snapshot: String): String {
         // UUID 생성
         val id = UUID.randomUUID().toString()
         // 키 예시: user:profile:123e4567-e89b-12d3-a456-426614174000
@@ -130,7 +130,8 @@ class RedisService(
         val userInfo = mapOf(
             "email" to email,
             "studentNumber" to studentNumber,
-            "courseCode" to courseCode,
+            // The field name is retained for compatibility with the current router contract.
+            "courseCode" to infrastructureKey,
             "clss" to clss,
             "snapshot" to snapshot
         )

@@ -209,7 +209,7 @@ class AssignmentService(
                 .contentType(MediaType.MULTIPART_FORM_DATA)
                 .bodyValue(LinkedMultiValueMap<String, Any>().apply {
                     add("course_id", course.id)
-                    add("namespace", "jcode-${course.code.lowercase()}-${course.clss}")
+                    add("namespace", course.namespaceKey ?: Course.namespaceKey(course.infrastructureKey, course.clss))
                     add("assignment_id", assignment.id)
                     add("version", version)
                     add("artifact_key", artifact.artifactKey)

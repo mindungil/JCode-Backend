@@ -56,7 +56,7 @@ class CourseManagerCacheReconcilerTest {
     private fun course(id: Long, code: String, clss: Int, status: CourseStatus) = Course(
         id = id,
         name = code,
-        code = code,
+        infrastructureKey = code,
         year = 2026,
         term = 1,
         professor = "Professor",

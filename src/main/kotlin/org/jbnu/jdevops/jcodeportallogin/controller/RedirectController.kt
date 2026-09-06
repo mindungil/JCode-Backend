@@ -99,12 +99,12 @@ class RedirectController(
             ?: throw ResponseStatusException(HttpStatus.CONFLICT, "JCode 주소가 아직 준비되지 않았습니다.")
 
         // 사용자 프로필 정보를 Redis에 저장하고 UUID를 획득 & UUID를 UTF-8로 URL 인코딩
-        val uuid = redisService.storeUserProfile(user.email, user.studentNum.toString(), course.code, course.clss.toString(), redirectRequest.snapshot.toString())
+        val uuid = redisService.storeUserProfile(user.email, user.studentNum.toString(), course.infrastructureKey, course.clss.toString(), redirectRequest.snapshot.toString())
         val encodedUUID = URLEncoder.encode(uuid, StandardCharsets.UTF_8.toString()).replace("+", "%2B")
 
         // 학생 Jcode 정보 Redis 동기화
-        if (redirectRequest.snapshot) redisService.storeSnapshotUserCourse(user.email, course.code, course.clss, jcodeUrl)
-        else redisService.storeUserCourse(user.email, course.code, course.clss, jcodeUrl)
+        if (redirectRequest.snapshot) redisService.storeSnapshotUserCourse(user.email, course.infrastructureKey, course.clss, jcodeUrl)
+        else redisService.storeUserCourse(user.email, course.infrastructureKey, course.clss, jcodeUrl)
 
         // 과제별 폴더 경로 결정
         var workspaceFile: String? = null

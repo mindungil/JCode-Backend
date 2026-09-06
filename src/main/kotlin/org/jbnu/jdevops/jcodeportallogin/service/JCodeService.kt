@@ -71,9 +71,9 @@ class JCodeService(
 
         val suffix = assignment?.let { "-${it.id}" } ?: ""
         val deploymentName = if (snapshot) {
-            "jcode-snapshot-${course.code.lowercase()}-${target.studentNum}$suffix"
+            "jcode-snapshot-${course.infrastructureKey.lowercase()}-${target.studentNum}$suffix"
         } else {
-            "jcode-${course.code.lowercase()}-${course.clss}-${target.studentNum}$suffix"
+            "jcode-${course.infrastructureKey.lowercase()}-${course.clss}-${target.studentNum}$suffix"
         }
         val jcode = jCodeRepository.saveAndFlush(
             Jcode(

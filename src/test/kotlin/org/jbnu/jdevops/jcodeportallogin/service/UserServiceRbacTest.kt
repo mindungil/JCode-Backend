@@ -106,9 +106,9 @@ class UserServiceRbacTest {
             targetUserCourse.id,
             WorkspaceOperationAction.DELETE_MEMBERSHIP
         )
-        verify(redisTemplate).delete("user:${student.email}:course:${course.code}:${course.clss}")
-        verify(redisTemplate).delete("user:${student.email}:course:${course.code}:${course.clss}:snapshot")
-        verify(setOperations).remove("course:${course.code}:${course.clss}:managers", student.email)
+        verify(redisTemplate).delete("user:${student.email}:course:${course.infrastructureKey}:${course.clss}")
+        verify(redisTemplate).delete("user:${student.email}:course:${course.infrastructureKey}:${course.clss}:snapshot")
+        verify(setOperations).remove("course:${course.infrastructureKey}:${course.clss}:managers", student.email)
     }
 
     @Test
@@ -117,7 +117,7 @@ class UserServiceRbacTest {
         val user = user(2, "student@example.com", RoleType.STUDENT)
         val rawKey = "ALG-1-secret"
 
-        `when`(courseRepository.findByCodeAndClss(course.code, course.clss)).thenReturn(listOf(course))
+        `when`(courseRepository.findByInfrastructureKeyAndClss(course.infrastructureKey, course.clss)).thenReturn(listOf(course))
         `when`(passwordEncoder.matches(rawKey, course.courseKey)).thenReturn(true)
         `when`(userRepository.findByEmail(user.email)).thenReturn(user)
 
@@ -135,7 +135,7 @@ class UserServiceRbacTest {
         val professor = user(2, "professor@example.com", RoleType.PROFESSOR)
         val rawKey = "ALG-1-secret"
 
-        `when`(courseRepository.findByCodeAndClss(course.code, course.clss)).thenReturn(listOf(course))
+        `when`(courseRepository.findByInfrastructureKeyAndClss(course.infrastructureKey, course.clss)).thenReturn(listOf(course))
         `when`(passwordEncoder.matches(rawKey, course.courseKey)).thenReturn(true)
         `when`(userRepository.findByEmail(professor.email)).thenReturn(professor)
         `when`(userCoursesRepository.findByUserIdAndCourseId(professor.id, course.id)).thenReturn(null)
@@ -170,7 +170,7 @@ class UserServiceRbacTest {
     private fun course() = Course(
         id = 10,
         name = "Algorithms",
-        code = "ALG",
+        infrastructureKey = "ALG",
         year = 2026,
         term = 1,
         professor = "Professor",

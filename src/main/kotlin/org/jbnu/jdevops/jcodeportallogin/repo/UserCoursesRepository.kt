@@ -18,7 +18,6 @@ interface UserCoursesRepository : JpaRepository<UserCourses, Long> {
     @Query("select membership from UserCourses membership where membership.user.id = :userId and membership.course.id = :courseId")
     fun findByUserIdAndCourseIdForUpdate(userId: Long, courseId: Long): UserCourses?
     fun existsByUserIdAndCourseId(userId: Long, courseId: Long): Boolean
-    fun findByUserIdAndCourseCode(userId: Long, courseCode: String): UserCourses?
     fun findByUserEmailAndRole(email: String, role: RoleType): List<UserCourses>
     fun countUserCoursesByCourseIdAndRole(courseId: Long, role: RoleType): Int
     fun existsByCourseIdAndUserIdAndRole(courseId: Long, userId: Long, role: RoleType): Boolean

@@ -17,11 +17,11 @@ data class Course(
     @field:Size(max = 100, message = "{course.name.size}")
     val name: String,
 
-    @Column(nullable = false)
-    @field:NotBlank(message = "{course.code.required}")
-    @field:Size(max = 20, message = "{course.code.size}")
-    @field:Pattern(regexp = "^[A-Za-z0-9]+$", message = "{course.code.pattern}")
-    val code: String,
+    @Column(name = "code", nullable = false)
+    @field:NotBlank(message = "{course.infrastructure-key.required}")
+    @field:Size(max = 20, message = "{course.infrastructure-key.size}")
+    @field:Pattern(regexp = "^[A-Za-z0-9]+$", message = "{course.infrastructure-key.pattern}")
+    val infrastructureKey: String,
 
     @Column(nullable = false)
     val year: Int,
@@ -101,6 +101,7 @@ data class Course(
     var assignments: MutableList<Assignment> = mutableListOf()
 ) {
     companion object {
-        fun namespaceKey(code: String, clss: Int) = "jcode-${code.trim().lowercase()}-$clss"
+        fun namespaceKey(infrastructureKey: String, clss: Int) =
+            "jcode-${infrastructureKey.trim().lowercase()}-$clss"
     }
 }

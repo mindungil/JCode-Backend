@@ -56,7 +56,7 @@ class WorkspaceReconciler(
     private fun executeAssignment(operation: ClaimedWorkspaceOperation): Map<*, *>? {
         val assignment = operationStore.loadAssignment(operation.targetId) ?: return null
         val course = assignment.course
-        val namespace = "jcode-${course.code.lowercase()}-${course.clss}"
+        val namespace = course.namespaceKey ?: Course.namespaceKey(course.infrastructureKey, course.clss)
         when (operation.action) {
             WorkspaceOperationAction.MIGRATE_ASSIGNMENT_PATH,
             WorkspaceOperationAction.PROVISION_ASSIGNMENT -> {
@@ -179,7 +179,7 @@ class WorkspaceReconciler(
     private fun executeMembership(operation: ClaimedWorkspaceOperation): Map<*, *>? {
         val membership = operationStore.loadMembership(operation.targetId) ?: return null
         val course = membership.course
-        val namespace = "jcode-${course.code.lowercase()}-${course.clss}"
+        val namespace = course.namespaceKey ?: Course.namespaceKey(course.infrastructureKey, course.clss)
         val jcodeNames = operationStore.loadMembershipJcodes(membership.id)
         return when (operation.action) {
             WorkspaceOperationAction.PROVISION_MEMBERSHIP -> if (membership.lifecycleStatus == MembershipStatus.PROVISIONING) post(
@@ -227,7 +227,7 @@ class WorkspaceReconciler(
     private fun executeJcode(operation: ClaimedWorkspaceOperation): Map<*, *>? {
         val jcode = operationStore.loadJcode(operation.targetId) ?: return null
         val course = jcode.course
-        val namespace = "jcode-${course.code.lowercase()}-${course.clss}"
+        val namespace = course.namespaceKey ?: Course.namespaceKey(course.infrastructureKey, course.clss)
         return when (operation.action) {
             WorkspaceOperationAction.PROVISION_JCODE -> if (
                 jcode.lifecycleStatus == JcodeLifecycleStatus.PROVISIONING &&
@@ -244,8 +244,8 @@ class WorkspaceReconciler(
                         "service_name" to jcode.serviceName,
                         "app_label" to jcode.deploymentName,
                         "file_path" to if (jcode.snapshot) {
-                            "${course.code.lowercase()}-${course.clss}"
-                        } else "workspace/${course.code.lowercase()}-${course.clss}-${jcode.user.studentNum}",
+                            "${course.infrastructureKey.lowercase()}-${course.clss}"
+                        } else "workspace/${course.infrastructureKey.lowercase()}-${course.clss}-${jcode.user.studentNum}",
                         "student_num" to jcode.user.studentNum.toString(),
                         "use_vnc" to course.useVnc,
                         "environment_profile" to course.environmentProfile.name,

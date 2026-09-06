@@ -118,7 +118,6 @@ class UserService(
             UserCoursesDto(
                 courseId = it.course.id,
                 courseName = it.course.name,
-                courseCode = it.course.code,
                 courseProfessor = it.course.professor,
                 courseClss = it.course.clss,
                 courseTerm = it.course.term,
@@ -146,7 +145,6 @@ class UserService(
             UserCoursesDto(
                 courseId = it.course.id,
                 courseName = it.course.name,
-                courseCode = it.course.code,
                 courseProfessor = it.course.professor,
                 courseClss = it.course.clss,
                 courseTerm = it.course.term,
@@ -196,7 +194,6 @@ class UserService(
             UserCourseDetailsDto(
                 courseId = it.course.id,
                 courseName = it.course.name,
-                courseCode = it.course.code,
                 courseProfessor = it.course.professor,
                 courseClss = it.course.clss,
                 courseTerm = it.course.term,
@@ -247,11 +244,10 @@ class UserService(
         if (parts.size < 3) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid course key format")
         }
-        val courseCode = parts[0]
+        val infrastructureKey = parts[0]
         val courseClss = parts[1].toIntOrNull() ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid class value")
 
-        // courseCode와 courseClss를 기준으로 강의 목록 조회
-        val courses = courseRepository.findByCodeAndClss(courseCode, courseClss)
+        val courses = courseRepository.findByInfrastructureKeyAndClss(infrastructureKey, courseClss)
         if (courses.isEmpty()) {
             throw ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found")
         }
@@ -278,7 +274,7 @@ class UserService(
             existingMembership.archivedAt = null
             existingMembership.lastError = null
             userCoursesRepository.save(existingMembership)
-            redisService.removeUserFromCourseManagerList(course.code, course.clss, email)
+            redisService.removeUserFromCourseManagerList(course.infrastructureKey, course.clss, email)
             workspaceOperationStore.enqueue(
                 WorkspaceOperationTarget.MEMBERSHIP,
                 existingMembership.id,
@@ -335,8 +331,8 @@ class UserService(
                 jcodeRepository.save(jcode)
             }
         }
-        redisService.deleteUserCourseAccess(email, course.code, course.clss)
-        redisService.removeUserFromCourseManagerList(course.code, course.clss, email)
+        redisService.deleteUserCourseAccess(email, course.infrastructureKey, course.clss)
+        redisService.removeUserFromCourseManagerList(course.infrastructureKey, course.clss, email)
         workspaceOperationStore.enqueue(
             WorkspaceOperationTarget.MEMBERSHIP, userCourse.id, WorkspaceOperationAction.DELETE_MEMBERSHIP
         )
@@ -417,11 +413,11 @@ class UserService(
             val course = userCourse.course
             // 새 역할이 ASSISTANT, PROFESSOR로 설정되었을 때는 강의의 관리자로 등록 (redis)
             if (newRole == RoleType.ASSISTANT || newRole == RoleType.PROFESSOR) {
-                redisService.addUserToCourseManagerList(course.code, course.clss, targetUser.email)
+                redisService.addUserToCourseManagerList(course.infrastructureKey, course.clss, targetUser.email)
             }
             // 새 역할이 STUDENT로 설정되었을 때는 강의의 관리자에서 등록 해제 (redis) + user_courses 엔티티의 role도 STUDENT로 업데이트
             else if (newRole == RoleType.STUDENT) {
-                redisService.removeUserFromCourseManagerList(course.code, course.clss, targetUser.email)
+                redisService.removeUserFromCourseManagerList(course.infrastructureKey, course.clss, targetUser.email)
             }
 
             userCourse.role = newRole
@@ -477,8 +473,8 @@ class UserService(
                 jcodeRepository.save(jcode)
             }
         }
-        redisService.deleteUserCourseAccess(user.email, course.code, course.clss)
-        redisService.removeUserFromCourseManagerList(course.code, course.clss, user.email)
+        redisService.deleteUserCourseAccess(user.email, course.infrastructureKey, course.clss)
+        redisService.removeUserFromCourseManagerList(course.infrastructureKey, course.clss, user.email)
         workspaceOperationStore.enqueue(
             WorkspaceOperationTarget.MEMBERSHIP, userCourse.id, WorkspaceOperationAction.DELETE_MEMBERSHIP
         )

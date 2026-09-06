@@ -48,9 +48,9 @@ data class Jcode(
 
     @Column(name = "deployment_name", nullable = false, length = 63)
     val deploymentName: String = if (snapshot) {
-        "jcode-snapshot-${course.code.lowercase()}-${user.studentNum}"
+        "jcode-snapshot-${course.infrastructureKey.lowercase()}-${user.studentNum}"
     } else {
-        "jcode-${course.code.lowercase()}-${course.clss}-${user.studentNum}"
+        "jcode-${course.infrastructureKey.lowercase()}-${course.clss}-${user.studentNum}"
     },
 
     @Column(name = "service_name", nullable = false, length = 63)

@@ -17,7 +17,7 @@ import org.springframework.web.server.ResponseStatusException
 class AuthorizationUtilTest {
     private val repository = mock(UserCoursesRepository::class.java)
     private val course = Course(
-        id = 10, name = "Algorithms", code = "ALG", year = 2026, term = 2,
+        id = 10, name = "Algorithms", infrastructureKey = "ALG", year = 2026, term = 2,
         professor = "Professor", clss = 1, vnc = false, courseKey = "key"
     )
 
