@@ -9,12 +9,13 @@ import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactor
 class RedisConfigTest {
     @Test
     fun `uses standalone Redis when Sentinel is not configured`() {
-        val factory = RedisConfig("redis", 6379, "secret", "", "")
+        val factory = RedisConfig("redis", 6379, "secret", "", "", 3000)
             .redisConnectionFactory() as LettuceConnectionFactory
 
         assertNotNull(factory.standaloneConfiguration)
         assertEquals("redis", factory.standaloneConfiguration.hostName)
         assertEquals(6379, factory.standaloneConfiguration.port)
+        assertEquals(3000, factory.clientConfiguration.commandTimeout.toMillis())
     }
 
     @Test
@@ -24,7 +25,8 @@ class RedisConfigTest {
             6379,
             "secret",
             "jcode",
-            "sentinel-0:26379, sentinel-1:26379, sentinel-2:26379"
+            "sentinel-0:26379, sentinel-1:26379, sentinel-2:26379",
+            3000,
         ).redisConnectionFactory() as LettuceConnectionFactory
 
         val sentinel = requireNotNull(factory.sentinelConfiguration)
@@ -38,7 +40,14 @@ class RedisConfigTest {
     @Test
     fun `rejects incomplete Sentinel configuration`() {
         assertThrows(IllegalArgumentException::class.java) {
-            RedisConfig("redis", 6379, "secret", "jcode", "").redisConnectionFactory()
+            RedisConfig("redis", 6379, "secret", "jcode", "", 3000).redisConnectionFactory()
+        }
+    }
+
+    @Test
+    fun `rejects a non-positive command timeout`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            RedisConfig("redis", 6379, "secret", "", "", 0).redisConnectionFactory()
         }
     }
 }

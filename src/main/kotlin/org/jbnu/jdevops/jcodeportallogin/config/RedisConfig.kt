@@ -8,12 +8,14 @@ import org.springframework.data.redis.connection.RedisNode
 import org.springframework.data.redis.connection.RedisPassword
 import org.springframework.data.redis.connection.RedisSentinelConfiguration
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration
+import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory
 import org.springframework.data.redis.core.RedisTemplate
 import org.springframework.data.redis.repository.configuration.EnableRedisRepositories
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer
 import org.springframework.data.redis.serializer.StringRedisSerializer
 import org.springframework.session.data.redis.config.annotation.web.http.EnableRedisHttpSession
+import java.time.Duration
 
 @Configuration
 @EnableRedisHttpSession
@@ -23,7 +25,8 @@ class RedisConfig(
     @Value("\${redis.port}") private val redisPort: Int,
     @Value("\${redis.password}") private val redisPassword: String,
     @Value("\${redis.sentinel.master:}") private val redisSentinelMaster: String,
-    @Value("\${redis.sentinel.nodes:}") private val redisSentinelNodes: String
+    @Value("\${redis.sentinel.nodes:}") private val redisSentinelNodes: String,
+    @Value("\${redis.command.timeout-millis:3000}") private val redisCommandTimeoutMillis: Long,
 ) {
 
     @Bean
@@ -41,14 +44,21 @@ class RedisConfig(
                 redisConfig.setPassword(password)
                 redisConfig.setSentinelPassword(password)
             }
-            return LettuceConnectionFactory(redisConfig)
+            return LettuceConnectionFactory(redisConfig, clientConfiguration())
         }
 
         val redisConfig = RedisStandaloneConfiguration(redisHost, redisPort)
         if (redisPassword.isNotBlank()) {
             redisConfig.setPassword(password)
         }
-        return LettuceConnectionFactory(redisConfig)
+        return LettuceConnectionFactory(redisConfig, clientConfiguration())
+    }
+
+    private fun clientConfiguration(): LettuceClientConfiguration {
+        require(redisCommandTimeoutMillis > 0) { "redis.command.timeout-millis must be positive" }
+        return LettuceClientConfiguration.builder()
+            .commandTimeout(Duration.ofMillis(redisCommandTimeoutMillis))
+            .build()
     }
 
     @Bean
