@@ -19,6 +19,18 @@ import org.springframework.stereotype.Component
 import org.springframework.util.AntPathMatcher
 import org.springframework.web.filter.OncePerRequestFilter
 
+private val excludedJwtAuthenticationPaths = listOf(
+    "/api/auth/token", "/api/auth/refresh",
+    "/swagger-ui/**", "/v3/api-docs/**",
+    "/oauth2/**", "/login",
+    "/actuator/health", "/actuator/health/**", "/actuator/info", "/actuator/prometheus",
+)
+
+internal fun isJwtAuthenticationExcluded(requestUri: String): Boolean {
+    val matcher = AntPathMatcher()
+    return excludedJwtAuthenticationPaths.any { matcher.match(it, requestUri) }
+}
+
 @Component
 class JwtAuthenticationFilter(
     private val jwtAuthService: JwtAuthService,
@@ -73,15 +85,7 @@ class JwtAuthenticationFilter(
 
     // access token 인증을 제외할 엔드포인트 설정
     override fun shouldNotFilter(request: HttpServletRequest): Boolean {
-        val matcher = AntPathMatcher()  // 와일드카드 패턴 허용 (**)
-        val excludedPaths = listOf(
-            "/api/auth/token", "/api/auth/refresh",         // access token 발급 엔드포인트
-            "/swagger-ui/**", "/v3/api-docs/**",            // swagger 관련 엔드포인트
-            "/oauth2/**", "/login",                         // 로그인 관련 엔드포인트
-            "/actuator/health", "/actuator/info", "/actuator/prometheus" // 운영 상태 엔드포인트
-        )
-
-        val shouldNotFilter = excludedPaths.any { matcher.match(it, request.requestURI) }
+        val shouldNotFilter = isJwtAuthenticationExcluded(request.requestURI)
         if (shouldNotFilter) {
             logger.debug("Request ${request.requestURI} is excluded from filtering")
         }

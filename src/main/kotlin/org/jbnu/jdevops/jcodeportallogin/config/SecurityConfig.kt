@@ -52,7 +52,7 @@ class SecurityConfig {
                     .requestMatchers("/api/auth/signup", "/api/auth/login/basic", "/api/auth/login/oidc/success").permitAll()
                     .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/auth/refresh").permitAll()
                     .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
-                    .requestMatchers("/actuator/health", "/actuator/info", "/actuator/prometheus").permitAll()
+                    .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info", "/actuator/prometheus").permitAll()
                     .requestMatchers("/api/**").authenticated()
                     .anyRequest().authenticated()  // 모든 요청에 대해 인증 요구
             }
