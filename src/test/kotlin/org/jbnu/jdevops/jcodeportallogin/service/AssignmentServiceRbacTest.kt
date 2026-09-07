@@ -35,6 +35,7 @@ class AssignmentServiceRbacTest {
     private val starterArtifactRepository = mock(StarterArtifactRepository::class.java)
     private val jCodeRepository = mock(JCodeRepository::class.java)
     private val workspaceOperationStore = mock(WorkspaceOperationStore::class.java)
+    private val redisService = mock(RedisService::class.java)
     private val generatorWebClient = WebClient.builder().build()
 
     private val service = AssignmentService(
@@ -45,6 +46,7 @@ class AssignmentServiceRbacTest {
         starterArtifactRepository,
         jCodeRepository,
         workspaceOperationStore,
+        redisService,
         generatorWebClient
     )
 

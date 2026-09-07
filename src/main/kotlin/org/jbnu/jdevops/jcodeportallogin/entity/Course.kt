@@ -83,6 +83,9 @@ data class Course(
     @Column(nullable = false)
     var status: CourseStatus = CourseStatus.ACTIVE,
 
+    @Column(name = "workspace_runtime_enabled", nullable = false)
+    var workspaceRuntimeEnabled: Boolean = false,
+
     @Column
     var endedAt: LocalDateTime? = null,
 

@@ -9,6 +9,7 @@ import org.jbnu.jdevops.jcodeportallogin.repo.UserRepository
 import org.jbnu.jdevops.jcodeportallogin.service.token.JwtAuthService
 import org.jbnu.jdevops.jcodeportallogin.service.token.TokenType
 import org.jbnu.jdevops.jcodeportallogin.util.JwtUtil
+import org.jbnu.jdevops.jcodeportallogin.service.RedisService
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
@@ -24,6 +25,7 @@ class JwtAuthenticationFilter(
     private val jwtUtil: JwtUtil,
     @Value("\${front.domain}") private val frontDomain: String, // 프론트엔드 도메인
     private val userRepository: UserRepository,
+    private val redisService: RedisService,
 ) : OncePerRequestFilter() {
 
     private val logger = LoggerFactory.getLogger(JwtAuthenticationFilter::class.java)
@@ -38,7 +40,10 @@ class JwtAuthenticationFilter(
         // "Authorization" 헤더에서 "Bearer {token}" 형식으로 Access Token 추출
         val accessToken = jwtUtil.extractBearerToken(request)
 
-        if (!accessToken.isNullOrEmpty() && jwtAuthService.validateToken(accessToken, TokenType.ACCESS)) {
+        if (!accessToken.isNullOrEmpty() &&
+            jwtAuthService.validateToken(accessToken, TokenType.ACCESS) &&
+            !redisService.isJwtBlacklisted(accessToken)
+        ) {
             // access token이 유효한지 확인
             val claims: Claims = jwtAuthService.getClaims(accessToken, TokenType.ACCESS)
             val email = claims.subject

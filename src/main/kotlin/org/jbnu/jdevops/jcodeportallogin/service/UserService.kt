@@ -170,6 +170,9 @@ class UserService(
                 jcodeId = it.id,
                 courseName = it.course.name,
                 status = it.lifecycleStatus,
+                observedStatus = it.observedStatus,
+                observedReason = it.observedReason,
+                lastObservedAt = it.lastObservedAt,
                 jcodeUrl = it.jcodeUrl,
                 assignmentId = it.assignment?.id,
                 lastError = it.lastError?.let {
@@ -329,6 +332,7 @@ class UserService(
                 jcode.lifecycleStatus = JcodeLifecycleStatus.DELETE_PENDING
                 jcode.lastError = null
                 jcodeRepository.save(jcode)
+                redisService.deleteJcodeRoute(jcode.id)
             }
         }
         redisService.deleteUserCourseAccess(email, course.infrastructureKey, course.clss)
@@ -471,6 +475,7 @@ class UserService(
                 jcode.lifecycleStatus = JcodeLifecycleStatus.DELETE_PENDING
                 jcode.lastError = null
                 jcodeRepository.save(jcode)
+                redisService.deleteJcodeRoute(jcode.id)
             }
         }
         redisService.deleteUserCourseAccess(user.email, course.infrastructureKey, course.clss)

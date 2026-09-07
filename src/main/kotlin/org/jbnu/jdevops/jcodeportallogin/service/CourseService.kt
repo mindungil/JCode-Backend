@@ -48,6 +48,7 @@ class CourseService(
     private val jCodeRepository: JCodeRepository,
     private val workspaceOperationStore: WorkspaceOperationStore,
     private val infrastructureOperationStore: CourseInfrastructureOperationStore,
+    private val redisService: RedisService,
     @Value("\${HARBOR_REGISTRY:harbor.jedutools.io}")
     private val harborRegistry: String = "harbor.jedutools.io"
 ) {
@@ -376,6 +377,7 @@ class CourseService(
         }
 
         course.status = CourseStatus.TERMINATING
+        course.workspaceRuntimeEnabled = false
         courseRepository.save(course)
         assignmentRepository.findByCourseId(course.id).forEach { assignment ->
             when (assignment.lifecycleStatus) {
@@ -415,6 +417,7 @@ class CourseService(
                 jcode.lifecycleStatus = JcodeLifecycleStatus.DELETE_PENDING
                 jcode.lastError = null
                 jCodeRepository.save(jcode)
+                redisService.deleteJcodeRoute(jcode.id)
                 workspaceOperationStore.enqueue(
                     WorkspaceOperationTarget.JCODE,
                     jcode.id,
@@ -452,6 +455,7 @@ class CourseService(
         }
 
         course.status = CourseStatus.ARCHIVING
+        course.workspaceRuntimeEnabled = false
         courseRepository.save(course)
         infrastructureOperationStore.enqueue(course.id, CourseInfrastructureAction.DELETE_NAMESPACE)
     }
@@ -467,6 +471,7 @@ class CourseService(
         }
 
         course.status = CourseStatus.PROVISIONING
+        course.workspaceRuntimeEnabled = false
         courseRepository.save(course)
         infrastructureOperationStore.enqueue(course.id, CourseInfrastructureAction.PROVISION_NAMESPACE)
     }

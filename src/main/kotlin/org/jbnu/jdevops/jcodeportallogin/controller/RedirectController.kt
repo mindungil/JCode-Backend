@@ -12,6 +12,7 @@ import org.jbnu.jdevops.jcodeportallogin.repo.JCodeRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.UserCoursesRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.UserRepository
 import org.jbnu.jdevops.jcodeportallogin.service.RedisService
+import org.jbnu.jdevops.jcodeportallogin.service.JCodeRuntimeObserver
 import org.jbnu.jdevops.jcodeportallogin.util.AuthorizationUtil
 import org.jbnu.jdevops.jcodeportallogin.util.JwtUtil
 import org.jbnu.jdevops.jcodeportallogin.util.WorkspaceNaming
@@ -34,7 +35,8 @@ class RedirectController(
     private val userRepository: UserRepository,
     private val courseRepository: CourseRepository,
     private val assignmentRepository: AssignmentRepository,
-    private val userCoursesRepository: UserCoursesRepository
+    private val userCoursesRepository: UserCoursesRepository,
+    private val jCodeRuntimeObserver: JCodeRuntimeObserver
 ) {
 
     @Value("\${router.url}")  // 환경 변수에서 Node.js URL 가져오기
@@ -95,16 +97,25 @@ class RedirectController(
         if (storedJcode.lifecycleStatus != org.jbnu.jdevops.jcodeportallogin.entity.JcodeLifecycleStatus.READY) {
             throw ResponseStatusException(HttpStatus.CONFLICT, "JCode 준비가 아직 완료되지 않았습니다.")
         }
+        jCodeRuntimeObserver.requireReady(storedJcode.id)
         val jcodeUrl = storedJcode.jcodeUrl
             ?: throw ResponseStatusException(HttpStatus.CONFLICT, "JCode 주소가 아직 준비되지 않았습니다.")
 
         // 사용자 프로필 정보를 Redis에 저장하고 UUID를 획득 & UUID를 UTF-8로 URL 인코딩
-        val uuid = redisService.storeUserProfile(user.email, user.studentNum.toString(), course.infrastructureKey, course.clss.toString(), redirectRequest.snapshot.toString())
+        val uuid = redisService.storeUserProfile(
+            user.email,
+            user.studentNum.toString(),
+            course.infrastructureKey,
+            course.clss.toString(),
+            redirectRequest.snapshot.toString(),
+            storedJcode.id
+        )
         val encodedUUID = URLEncoder.encode(uuid, StandardCharsets.UTF_8.toString()).replace("+", "%2B")
 
         // 학생 Jcode 정보 Redis 동기화
         if (redirectRequest.snapshot) redisService.storeSnapshotUserCourse(user.email, course.infrastructureKey, course.clss, jcodeUrl)
         else redisService.storeUserCourse(user.email, course.infrastructureKey, course.clss, jcodeUrl)
+        redisService.storeJcodeRoute(storedJcode.id, jcodeUrl)
 
         // 과제별 폴더 경로 결정
         var workspaceFile: String? = null
@@ -134,7 +145,7 @@ class RedirectController(
         val targetParameter = if (workspaceFile != null) "workspace" else "folder"
         val targetPath = workspaceFile ?: folderPath
         val encodedTarget = URLEncoder.encode(targetPath, StandardCharsets.UTF_8.toString())
-        val finalNodeJsUrl = "$routerUrl?id=$encodedUUID&$targetParameter=$encodedTarget"
+        val finalNodeJsUrl = "${routerUrl.trimEnd('/')}/session/$encodedUUID/?$targetParameter=$encodedTarget"
 
         // Keycloak Access Token을 HTTP-Only Secure 쿠키로 설정
         response.addCookie(jwtUtil.createJwtCookie("jcodeAt", token))

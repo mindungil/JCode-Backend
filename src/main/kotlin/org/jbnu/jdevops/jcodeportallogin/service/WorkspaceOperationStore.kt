@@ -45,6 +45,17 @@ class WorkspaceOperationStore(
     }
 
     @Transactional
+    fun enqueueOnce(targetType: WorkspaceOperationTarget, targetId: Long, action: WorkspaceOperationAction): Boolean {
+        if (operationRepository.existsByTargetTypeAndTargetIdAndStatusIn(targetType, targetId, active)) {
+            return false
+        }
+        operationRepository.save(
+            WorkspaceOperation(targetType = targetType, targetId = targetId, action = action)
+        )
+        return true
+    }
+
+    @Transactional
     fun enqueueBackfillOnce(targetId: Long, action: WorkspaceOperationAction) {
         val key = UUID.nameUUIDFromBytes(
             "assignment-v7:$targetId:${action.name}".toByteArray(StandardCharsets.UTF_8)
@@ -213,6 +224,9 @@ class WorkspaceOperationStore(
                     it.jcodeUrl = result?.get("jcodeUrl") as? String
                         ?: throw IllegalStateException("Generator가 jcodeUrl을 반환하지 않았습니다.")
                     it.lifecycleStatus = JcodeLifecycleStatus.READY
+                    it.observedStatus = JcodeObservedStatus.READY
+                    it.observedReason = "READY"
+                    it.lastObservedAt = LocalDateTime.now()
                     it.lastError = null
                     jCodeRepository.save(it)
                 } else {
@@ -231,6 +245,9 @@ class WorkspaceOperationStore(
             }
             WorkspaceOperationAction.DELETE_JCODE -> jCodeRepository.findById(operation.targetId).ifPresent {
                 it.lifecycleStatus = JcodeLifecycleStatus.ARCHIVED
+                it.observedStatus = JcodeObservedStatus.MISSING
+                it.observedReason = "DELETED"
+                it.lastObservedAt = LocalDateTime.now()
                 it.archivedAt = LocalDateTime.now()
                 it.lastError = null
                 jCodeRepository.save(it)
@@ -277,6 +294,9 @@ class WorkspaceOperationStore(
                         JcodeLifecycleStatus.DELETE_FAILED
                     } else JcodeLifecycleStatus.PROVISION_FAILED
                     it.lastError = message
+                    it.observedStatus = JcodeObservedStatus.FAILED
+                    it.observedReason = "RECONCILE_FAILED"
+                    it.lastObservedAt = now
                     jCodeRepository.save(it)
                 }
             }

@@ -82,15 +82,18 @@ class CourseInfrastructureOperationStore(
                         course.status = CourseStatus.ACTIVE
                         course.endedAt = null
                     }
+                    course.workspaceRuntimeEnabled = true
                 }
                 CourseInfrastructureAction.SYNC_NAMESPACE_METADATA -> Unit
                 CourseInfrastructureAction.DELETE_WORKLOADS -> {
+                    course.workspaceRuntimeEnabled = false
                     if (course.status == CourseStatus.TERMINATING) {
                         course.status = CourseStatus.ENDED
                         course.endedAt = LocalDateTime.now()
                     }
                 }
                 CourseInfrastructureAction.DELETE_NAMESPACE -> {
+                    course.workspaceRuntimeEnabled = false
                     if (course.status == CourseStatus.ARCHIVING) {
                         course.status = CourseStatus.ARCHIVED
                         course.namespaceKey = null
@@ -152,12 +155,14 @@ class CourseInfrastructureOperationStore(
         if (course.namespaceKey == null) {
             // A legacy duplicate never owned the namespace, so no K8s cleanup is allowed.
             course.status = CourseStatus.ARCHIVED
+            course.workspaceRuntimeEnabled = false
             course.endedAt = now
             courseRepository.save(course)
             return true
         }
 
         course.status = CourseStatus.ARCHIVING
+        course.workspaceRuntimeEnabled = false
         courseRepository.save(course)
         operationRepository.save(
             CourseInfrastructureOperation(

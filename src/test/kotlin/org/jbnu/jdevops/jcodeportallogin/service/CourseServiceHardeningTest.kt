@@ -46,6 +46,7 @@ class CourseServiceHardeningTest {
     private val starterArtifactRepository = mock(org.jbnu.jdevops.jcodeportallogin.repo.StarterArtifactRepository::class.java)
     private val jCodeRepository = mock(org.jbnu.jdevops.jcodeportallogin.repo.JCodeRepository::class.java)
     private val workspaceOperationStore = mock(WorkspaceOperationStore::class.java)
+    private val redisService = mock(RedisService::class.java)
     private val service = CourseService(
         userCoursesRepository,
         assignmentRepository,
@@ -57,6 +58,7 @@ class CourseServiceHardeningTest {
         jCodeRepository,
         workspaceOperationStore,
         infrastructureOperationStore,
+        redisService,
     )
 
     @Test
@@ -187,6 +189,7 @@ class CourseServiceHardeningTest {
             jCodeRepository,
             workspaceOperationStore,
             infrastructureOperationStore,
+            redisService,
             "registry.internal:5443",
         )
         val request = dto(clss = 1, vnc = false).copy(

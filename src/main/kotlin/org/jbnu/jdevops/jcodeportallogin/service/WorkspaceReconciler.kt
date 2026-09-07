@@ -233,6 +233,9 @@ class WorkspaceReconciler(
                 jcode.lifecycleStatus == JcodeLifecycleStatus.PROVISIONING &&
                 jcode.userCourse.lifecycleStatus == MembershipStatus.READY
             ) {
+                if (course.status != CourseStatus.ACTIVE || !course.workspaceRuntimeEnabled) {
+                    throw WorkspaceProvisioningPendingException()
+                }
                 val provisioned = post(
                     "/api/jcode",
                     "jcode:write",

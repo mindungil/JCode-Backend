@@ -26,6 +26,7 @@ class AssignmentService(
     private val starterArtifactRepository: StarterArtifactRepository,
     private val jCodeRepository: JCodeRepository,
     private val workspaceOperationStore: WorkspaceOperationStore,
+    private val redisService: RedisService,
     @Qualifier("generatorWorkspaceWebClient") private val generatorWebClient: WebClient
 ) {
     private fun validateAssignmentAuthority(courseId: Long, email: String) {
@@ -73,6 +74,7 @@ class AssignmentService(
                 jcode.lifecycleStatus = JcodeLifecycleStatus.DELETE_PENDING
                 jcode.lastError = null
                 jCodeRepository.save(jcode)
+                redisService.deleteJcodeRoute(jcode.id)
                 workspaceOperationStore.enqueue(
                     WorkspaceOperationTarget.JCODE, jcode.id, WorkspaceOperationAction.DELETE_JCODE
                 )
