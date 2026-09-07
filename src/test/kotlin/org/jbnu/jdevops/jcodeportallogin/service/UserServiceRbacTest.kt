@@ -167,6 +167,32 @@ class UserServiceRbacTest {
         verify(userCoursesRepository, never()).save(any(UserCourses::class.java))
     }
 
+    @Test
+    fun `user course list hides archived memberships and ended courses`() {
+        val activeCourse = course()
+        val endedCourse = course().copy(id = 11).apply { status = CourseStatus.ENDED }
+        val archivedCourse = course().copy(id = 12).apply { status = CourseStatus.ARCHIVED }
+        val baseUser = user(2, "student@example.com", RoleType.STUDENT)
+        val visible = userCourse(baseUser, activeCourse, RoleType.STUDENT).apply {
+            lifecycleStatus = MembershipStatus.READY
+        }
+        val left = userCourse(baseUser, activeCourse.copy(id = 13), RoleType.STUDENT).apply {
+            lifecycleStatus = MembershipStatus.ARCHIVED
+        }
+        val ended = userCourse(baseUser, endedCourse, RoleType.STUDENT).apply {
+            lifecycleStatus = MembershipStatus.READY
+        }
+        val archived = userCourse(baseUser, archivedCourse, RoleType.STUDENT).apply {
+            lifecycleStatus = MembershipStatus.READY
+        }
+        val user = baseUser.copy(courses = listOf(visible, left, ended, archived))
+        `when`(userRepository.findByEmail(user.email)).thenReturn(user)
+
+        val result = service.getUserCourses(user.email)
+
+        assertEquals(listOf(activeCourse.id), result.map { it.courseId })
+    }
+
     private fun course() = Course(
         id = 10,
         name = "Algorithms",

@@ -113,7 +113,7 @@ class UserService(
         val user = userRepository.findByEmail(email)
             ?: throw IllegalArgumentException("User not found with email: $email")
 
-        val userCourses = user.courses
+        val userCourses = user.courses.filter(::isVisibleMembership)
         return userCourses.map {
             UserCoursesDto(
                 courseId = it.course.id,
@@ -140,6 +140,7 @@ class UserService(
 
         // Repository를 사용해서 직접 ASSISTANT 역할인 강의만 조회
         val assistantCourses = userCoursesRepository.findByUserEmailAndRole(email, RoleType.ASSISTANT)
+            .filter(::isVisibleMembership)
 
         return assistantCourses.map {
             UserCoursesDto(
@@ -165,7 +166,9 @@ class UserService(
         val user = userRepository.findByEmail(email)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "User not found with email: $email")
 
-        return jcodeRepository.findByUserId(user.id).map {
+        return jcodeRepository.findByUserId(user.id)
+            .filter { it.lifecycleStatus != JcodeLifecycleStatus.ARCHIVED }
+            .map {
             JCodeDto(
                 jcodeId = it.id,
                 courseName = it.course.name,
@@ -188,7 +191,9 @@ class UserService(
         val user = userRepository.findByEmail(email)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "User not found with email: $email")
 
-        return userCoursesRepository.findByUserId(user.id).map {
+        return userCoursesRepository.findByUserId(user.id)
+            .filter(::isVisibleMembership)
+            .map {
             val assignments = assignmentRepository.findByCourseId(it.course.id)
             val jcode = jcodeRepository.findFirstByUserIdAndCourseIdAndSnapshotAndAssignmentIsNullAndLifecycleStatusNotOrderByIdDesc(
                 user.id, it.course.id, false, JcodeLifecycleStatus.ARCHIVED
@@ -238,6 +243,10 @@ class UserService(
             )
         }
     }
+
+    private fun isVisibleMembership(membership: UserCourses): Boolean =
+        membership.lifecycleStatus != MembershipStatus.ARCHIVED &&
+            membership.course.status !in setOf(CourseStatus.ENDED, CourseStatus.ARCHIVED)
 
     // 유저 강의 가입
     @Transactional
