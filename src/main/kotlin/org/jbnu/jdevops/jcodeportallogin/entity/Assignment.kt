@@ -44,7 +44,7 @@ data class Assignment(
     @field:NotBlank(message = "{assignment.name.required}")
     val name: String,
 
-    @Column
+    @Column(length = 500)
     val description: String?,
 
     @Column(name = "dir_name", nullable = false)
@@ -62,6 +62,9 @@ data class Assignment(
 
     @Column(name = "has_starter_code", nullable = false)
     var hasStarterCode: Boolean = false,
+
+    @Column(name = "starter_distribution_pending", nullable = false)
+    var starterDistributionPending: Boolean = false,
 
     @Enumerated(EnumType.STRING)
     @Column(name = "lifecycle_status", nullable = false, length = 24)
@@ -83,6 +86,9 @@ data class Assignment(
     @Column(name = "finalized_at")
     var finalizedAt: LocalDateTime? = null,
 
+    @Column(name = "finalization_generation", nullable = false)
+    var finalizationGeneration: Int = 0,
+
     @Column
     @field:NotNull(message = "{kickoff.date.required}")
     val kickoffDate: LocalDateTime,
@@ -95,5 +101,9 @@ data class Assignment(
     val createdAt: LocalDateTime = LocalDateTime.now(),
 
     @Column(nullable = false)
-    var updatedAt: LocalDateTime = LocalDateTime.now()
+    var updatedAt: LocalDateTime = LocalDateTime.now(),
+
+    @Version
+    @Column(nullable = false)
+    var version: Long = 0
 )

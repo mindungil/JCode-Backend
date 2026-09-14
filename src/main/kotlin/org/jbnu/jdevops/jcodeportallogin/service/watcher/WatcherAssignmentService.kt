@@ -5,6 +5,7 @@ import org.jbnu.jdevops.jcodeportallogin.dto.watcher.AssingmentTotalGraphListDat
 import org.jbnu.jdevops.jcodeportallogin.dto.watcher.WatcherAssignmentDto
 import org.jbnu.jdevops.jcodeportallogin.dto.watcher.WatcherLogAvgDto
 import org.jbnu.jdevops.jcodeportallogin.entity.RoleType
+import org.jbnu.jdevops.jcodeportallogin.entity.MembershipStatus
 import org.jbnu.jdevops.jcodeportallogin.repo.AssignmentRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.CourseRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.UserCoursesRepository
@@ -29,12 +30,16 @@ class WatcherAssignmentService(
         val user = userRepository.findByEmail(email)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")
         if (user.role == RoleType.ADMIN) return RoleType.ADMIN
-        return userCoursesRepository.findByUserIdAndCourseId(user.id, courseId)?.role
+        val membership = userCoursesRepository.findByUserIdAndCourseId(user.id, courseId)
             ?: throw ResponseStatusException(HttpStatus.FORBIDDEN, "해당 강의에 소속되어 있지 않습니다.")
+        if (membership.lifecycleStatus != MembershipStatus.READY) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "활성 상태의 강의 소속만 Watcher를 조회할 수 있습니다.")
+        }
+        return membership.role
     }
 
     fun getAssignmentsData(email: String, courseId: Long, assignmentId: Long): WatcherAssignmentDto? {
-        requireMembership(email, courseId)
+        val courseRole = requireMembership(email, courseId)
         val course = courseRepository.findById(courseId)
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
 
@@ -48,7 +53,7 @@ class WatcherAssignmentService(
         val classDiv = "${course.infrastructureKey.lowercase()}-${course.clss}"
 
         return try {
-            webClient.get()
+            val result = webClient.get()
                 .uri { uriBuilder ->
                     uriBuilder
                         .path("/api/assignment/{class_div}/{hw_name}")
@@ -57,6 +62,15 @@ class WatcherAssignmentService(
                 .retrieve()
                 .bodyToMono(WatcherAssignmentDto::class.java)
                 .block()
+            if (courseRole == RoleType.STUDENT && result != null) {
+                WatcherAssignmentDto(
+                    percentile_90 = result.percentile_90,
+                    percentile_50 = result.percentile_50,
+                    top_7 = emptyList(),
+                    avg_bytes = result.avg_bytes,
+                    avg_num = result.avg_num
+                )
+            } else result
         } catch (ex: Exception) {
             println("Error calling external API: ${ex.message}")
             null
@@ -92,7 +106,8 @@ class WatcherAssignmentService(
                 .block()
 
             if (courseRole == RoleType.STUDENT) {
-                val totalStudents = userCoursesRepository.countUserCoursesByCourseIdAndRole(courseId, RoleType.STUDENT)
+                val totalStudents = userCoursesRepository.findByCourseIdAndRole(courseId, RoleType.STUDENT)
+                    .count { it.lifecycleStatus == MembershipStatus.READY }
                 modifyGraphDataForStudent(graphData, user.studentNum, totalStudents, courseId)
             } else {
                 graphData
@@ -112,7 +127,9 @@ class WatcherAssignmentService(
         val initialList = data?.results?.mapIndexedNotNull { index, graph ->
             val usercourse = userCoursesRepository.findByUserStudentNumAndCourseId(graph.student_num, courseId)
 
-            if (usercourse != null && usercourse.role == RoleType.STUDENT) {
+            if (usercourse != null && usercourse.role == RoleType.STUDENT &&
+                usercourse.lifecycleStatus == MembershipStatus.READY
+            ) {
                 if (!myDataUsed && graph.student_num == myStudentNum) {
                     // 자신의 데이터는 실제 학번 유지
                     myDataUsed = true

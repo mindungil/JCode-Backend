@@ -49,6 +49,10 @@ data class UserCourses(
     @Column(name = "archived_at")
     var archivedAt: LocalDateTime? = null,
 
+    @Version
+    @Column(nullable = false)
+    var version: Long = 0,
+
     @OneToMany(mappedBy = "userCourse", cascade = [CascadeType.ALL], fetch = FetchType.LAZY, orphanRemoval = true)
     val jcodes: List<Jcode> = mutableListOf(),
 

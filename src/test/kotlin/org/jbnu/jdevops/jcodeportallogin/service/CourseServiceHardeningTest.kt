@@ -109,6 +109,22 @@ class CourseServiceHardeningTest {
     }
 
     @Test
+    fun `global admin course creation does not create a course scoped admin role`() {
+        val admin = User(id = 1, email = "admin@example.com", role = RoleType.ADMIN, studentNum = 1)
+        `when`(courseKeyUtil.generateCourseEnrollmentCode(anyString(), eq(1), eq(10))).thenReturn("raw-key")
+        `when`(passwordEncoder.encode("raw-key")).thenReturn("encoded-key")
+        `when`(courseRepository.save(org.mockito.ArgumentMatchers.any(Course::class.java))).thenAnswer {
+            (it.arguments[0] as Course).copy(id = 46)
+        }
+        `when`(userRepository.findByEmail(admin.email)).thenReturn(admin)
+
+        service.createCourse(dto(clss = 1, vnc = false), admin.email)
+
+        verify(userCoursesRepository, never()).save(org.mockito.ArgumentMatchers.any(UserCourses::class.java))
+        verify(infrastructureOperationStore).enqueue(46, CourseInfrastructureAction.PROVISION_NAMESPACE)
+    }
+
+    @Test
     fun `student cannot create a course through the service`() {
         val student = User(id = 8, email = "student@example.com", role = RoleType.STUDENT, studentNum = 20260001)
         `when`(userRepository.findByEmail(student.email)).thenReturn(student)
@@ -271,6 +287,39 @@ class CourseServiceHardeningTest {
             org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceOperationAction.DELETE_JCODE
         )
         verify(jCodeRepository, never()).delete(org.mockito.ArgumentMatchers.any(Jcode::class.java))
+    }
+
+    @Test
+    fun `ending a course cancels only a starter upload that never reached storage`() {
+        val course = course()
+        val assignment = Assignment(
+            id = 4,
+            course = course,
+            name = "과제",
+            description = null,
+            workspaceKey = "assignment-4",
+            dirName = "assignment-4",
+            starterDistributionPending = true,
+            hasStarterCode = false,
+            lastError = "STARTER_UPLOAD_FAILED",
+            lifecycleStatus = AssignmentLifecycleStatus.ACTIVE,
+            scheduleStatus = AssignmentScheduleStatus.OPEN,
+            kickoffDate = LocalDateTime.now().minusDays(1),
+            deadlineDate = LocalDateTime.now().plusDays(1)
+        )
+        `when`(courseRepository.findById(course.id)).thenReturn(Optional.of(course))
+        `when`(assignmentRepository.findByCourseId(course.id)).thenReturn(listOf(assignment))
+        `when`(jCodeRepository.findByCourseId(course.id)).thenReturn(emptyList())
+
+        service.endCourse(course.id)
+
+        assertEquals(false, assignment.starterDistributionPending)
+        assertEquals(null, assignment.lastError)
+        verify(workspaceOperationStore).enqueue(
+            org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceOperationTarget.ASSIGNMENT,
+            assignment.id,
+            org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceOperationAction.ARCHIVE_FINAL_SUBMISSION
+        )
     }
 
     @Test

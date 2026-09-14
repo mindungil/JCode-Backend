@@ -77,7 +77,7 @@ class AssignmentController(
             courseId, assignmentId, file, overwritePolicy, deployNow, email, token
         )
         return ResponseEntity.accepted().body(
-            mapOf("msg" to "스타터 코드 원본을 저장했습니다.", "version" to assignment.starterVersion.toString())
+            mapOf("msg" to "스타터 코드 등록 및 배포를 요청했습니다.", "version" to assignment.starterVersion.toString())
         )
     }
 

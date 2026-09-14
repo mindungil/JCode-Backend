@@ -4,6 +4,7 @@ import org.jbnu.jdevops.jcodeportallogin.repo.AssignmentRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.CourseRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.UserCoursesRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.UserRepository
+import org.jbnu.jdevops.jcodeportallogin.entity.MembershipStatus
 import org.jbnu.jdevops.jcodeportallogin.util.AuthorizationUtil
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.core.ParameterizedTypeReference
@@ -21,6 +22,14 @@ class WatcherSelectionService (
     private val userRepository: UserRepository,
     private val userCoursesRepository: UserCoursesRepository
 ) {
+    private fun requireReadyTargetMembership(userId: Long, courseId: Long) {
+        val membership = userCoursesRepository.findByUserIdAndCourseId(userId, courseId)
+            ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "UserCourse not found")
+        if (membership.lifecycleStatus != MembershipStatus.READY) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "활성 상태의 강의 소속만 Watcher를 조회할 수 있습니다.")
+        }
+    }
+
     fun getFileSelections(email: String, courseId: Long, assignmentId: Long, userId: Long): List<String>? {
         val currentUser = userRepository.findByEmail(email)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Current User not found")
@@ -40,9 +49,7 @@ class WatcherSelectionService (
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "The assignment does not belong to the specified course")
         }
 
-        if (!userCoursesRepository.existsByUserIdAndCourseId(targetUser.id, course.id)) {
-            throw ResponseStatusException(HttpStatus.NOT_FOUND, "UserCourse not found")
-        }
+        requireReadyTargetMembership(targetUser.id, course.id)
 
         val classDiv = "${course.infrastructureKey.lowercase()}-${course.clss}"
 
@@ -81,9 +88,7 @@ class WatcherSelectionService (
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "The assignment does not belong to the specified course")
         }
 
-        if (!userCoursesRepository.existsByUserIdAndCourseId(targetUser.id, course.id)) {
-            throw ResponseStatusException(HttpStatus.NOT_FOUND, "UserCourse not found")
-        }
+        requireReadyTargetMembership(targetUser.id, course.id)
 
         val classDiv = "${course.infrastructureKey.lowercase()}-${course.clss}"
 

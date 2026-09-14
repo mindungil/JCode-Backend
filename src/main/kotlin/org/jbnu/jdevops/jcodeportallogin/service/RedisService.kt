@@ -6,12 +6,16 @@ import org.springframework.stereotype.Service
 import java.util.concurrent.TimeUnit
 import java.util.UUID
 import java.security.MessageDigest
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import java.time.Duration
+import java.time.Instant
 
 @Service
 class RedisService(
     private val redisTemplate: StringRedisTemplate
 ) {
-    // 프로필 조회하는 메서드 (접근 시마다 TTL 다시 세팅)
+    private val objectMapper = jacksonObjectMapper()
+    // 프로필 조회 시 원래 만료 시각을 넘지 않는 범위에서 Redis TTL을 정렬한다.
     fun getUserProfile(uuid: String): MutableMap<String, String>? {
         val key = "user:profile:$uuid"
         val ops = redisTemplate.opsForHash<String, String>()
@@ -19,12 +23,17 @@ class RedisService(
         // 해시 전체 필드 조회
         val result = ops.entries(key)
 
-        // result가 비어있지 않다면 => 키가 존재하므로 TTL 갱신
-        if (result.isNotEmpty()) {
-            redisTemplate.expire(key, 6, TimeUnit.HOURS)
+        if (result.isEmpty()) return null
+        val expiresAt = result["expiresAt"]?.toLongOrNull()
+        if (expiresAt != null) {
+            val remaining = expiresAt - Instant.now().epochSecond
+            if (remaining <= 0) {
+                redisTemplate.delete(key)
+                return null
+            }
+            redisTemplate.expire(key, remaining.coerceAtMost(6 * 3600L), TimeUnit.SECONDS)
         }
-
-        return if (result.isEmpty()) null else result
+        return result
     }
 
     // JCode URL을 Redis에서 가져오기
@@ -44,8 +53,23 @@ class RedisService(
         redisTemplate.opsForValue().set(key, jcodeUrl, 180, TimeUnit.DAYS) // 유효기간 6개월 (약 180일)
     }
 
-    fun storeJcodeRoute(jcodeId: Long, jcodeUrl: String) {
-        redisTemplate.opsForValue().set("jcode:$jcodeId:route", jcodeUrl, 180, TimeUnit.DAYS)
+    fun storeJcodeRoute(
+        jcodeId: Long,
+        jcodeUrl: String,
+        revision: Long,
+        mountHash: String,
+        status: String = "READY"
+    ) {
+        val route = objectMapper.writeValueAsString(
+            mapOf(
+                "url" to jcodeUrl,
+                "jcodeId" to jcodeId,
+                "revision" to revision,
+                "mountHash" to mountHash,
+                "status" to status
+            )
+        )
+        redisTemplate.opsForValue().set("jcode:$jcodeId:route", route, 180, TimeUnit.DAYS)
     }
 
     fun deleteJcodeRoute(jcodeId: Long) {
@@ -158,7 +182,15 @@ class RedisService(
         infrastructureKey: String,
         clss: String,
         snapshot: String,
-        jcodeId: Long
+        jcodeId: Long,
+        viewerId: Long,
+        viewerEmail: String,
+        targetMembershipId: Long,
+        assignmentId: Long?,
+        mode: String,
+        revision: Long,
+        mountHash: String,
+        expiresAt: Instant = Instant.now().plus(Duration.ofHours(6))
     ): String {
         // UUID 생성
         val id = UUID.randomUUID().toString()
@@ -173,15 +205,34 @@ class RedisService(
             "clss" to clss,
             "snapshot" to snapshot,
             "jcodeId" to jcodeId.toString(),
-            "routeVersion" to "2"
+            "viewerId" to viewerId.toString(),
+            "viewerEmail" to viewerEmail,
+            "targetMembershipId" to targetMembershipId.toString(),
+            "assignmentId" to (assignmentId?.toString() ?: ""),
+            "mode" to mode,
+            "revision" to revision.toString(),
+            "mountHash" to mountHash,
+            "expiresAt" to expiresAt.epochSecond.toString(),
+            "routeVersion" to "3"
         )
         // Redis 해시에 여러 필드를 한 번에 저장
         redisTemplate.opsForHash<String, String>().putAll(key, userInfo)
 
         // TTL 6시간 설정
-        redisTemplate.expire(key, 6, TimeUnit.HOURS)
+        val ttlSeconds = Duration.between(Instant.now(), expiresAt).seconds.coerceIn(1, 6 * 3600L)
+        redisTemplate.expire(key, ttlSeconds, TimeUnit.SECONDS)
+        val viewerIndexKey = "user:$viewerId:jcode-profiles"
+        redisTemplate.opsForSet().add(viewerIndexKey, key)
+        redisTemplate.expire(viewerIndexKey, 6, TimeUnit.HOURS)
 
         return id
+    }
+
+    fun revokeViewerProfiles(viewerId: Long) {
+        val indexKey = "user:$viewerId:jcode-profiles"
+        val profileKeys = redisTemplate.opsForSet().members(indexKey).orEmpty()
+        if (profileKeys.isNotEmpty()) redisTemplate.delete(profileKeys)
+        redisTemplate.delete(indexKey)
     }
 
     companion object {

@@ -9,6 +9,7 @@ import org.jbnu.jdevops.jcodeportallogin.dto.user.UserProfileUpdateDto
 import org.jbnu.jdevops.jcodeportallogin.dto.usercourse.UserCourseDetailsDto
 import org.jbnu.jdevops.jcodeportallogin.dto.usercourse.UserCoursesDto
 import org.jbnu.jdevops.jcodeportallogin.entity.*
+import org.jbnu.jdevops.jcodeportallogin.exception.PublicApiException
 import org.jbnu.jdevops.jcodeportallogin.repo.*
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.http.HttpStatus
@@ -16,7 +17,10 @@ import org.springframework.http.ResponseEntity
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import org.springframework.transaction.support.TransactionSynchronization
+import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.web.server.ResponseStatusException
+import org.slf4j.LoggerFactory
 
 @Service
 class UserService(
@@ -29,8 +33,27 @@ class UserService(
     private val courseRepository: CourseRepository,
     private val redisService: RedisService,
     private val jCodeService: JCodeService,
-    private val workspaceOperationStore: WorkspaceOperationStore
+    private val workspaceOperationStore: WorkspaceOperationStore,
+    private val workspacePolicyRevisionService: WorkspacePolicyRevisionService
 ) {
+    private val logger = LoggerFactory.getLogger(javaClass)
+
+    private fun afterCommit(action: () -> Unit) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action()
+            return
+        }
+        TransactionSynchronizationManager.registerSynchronization(object : TransactionSynchronization {
+            override fun afterCommit() {
+                try {
+                    action()
+                } catch (error: Exception) {
+                    logger.warn("커밋 후 Redis 권한 캐시 갱신에 실패했습니다. 정기 동기화에서 재시도합니다.", error)
+                }
+            }
+        })
+    }
+
     @Transactional
     fun register(registerUserDto: RegisterUserDto): ResponseEntity<String> {
         // 이메일 중복 확인
@@ -86,9 +109,12 @@ class UserService(
         val user = userRepository.findByEmail(email)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")
 
+        val normalizedName = updateDto.name.trim()
+        val nameChanged = normalizedName != user.name
+
         // 이름 수정: updateDto.name이 null이 아니고, 기존 이름과 다를 경우에 user.name에 값을 할당
-        if (updateDto.name != user.name) {
-            user.name = updateDto.name
+        if (nameChanged) {
+            user.name = normalizedName
         }
 
         // 학생번호 수정: updateDto.studentNum이 null이 아니라면 updateStudentNum() 메서드 호출
@@ -102,7 +128,16 @@ class UserService(
         }
 
         // 변경된 내용 저장
-        val updatedUser = userRepository.save(user)
+        userRepository.save(user)
+
+        if (nameChanged) {
+            userCoursesRepository.findByUserId(user.id)
+                .asSequence()
+                .map { it.course }
+                .filter { it.status == CourseStatus.ACTIVE && it.workspaceRuntimeEnabled }
+                .distinctBy { it.id }
+                .forEach { workspacePolicyRevisionService.bump(it.id) }
+        }
 
         return mapOf("message" to message)
     }
@@ -167,7 +202,10 @@ class UserService(
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "User not found with email: $email")
 
         return jcodeRepository.findByUserId(user.id)
-            .filter { it.lifecycleStatus != JcodeLifecycleStatus.ARCHIVED }
+            .filter {
+                it.lifecycleStatus != JcodeLifecycleStatus.ARCHIVED &&
+                    it.kind != JcodeKind.INSPECTOR
+            }
             .map {
             JCodeDto(
                 jcodeId = it.id,
@@ -225,6 +263,7 @@ class UserService(
                         dirName = assignment.workspaceKey,
                         workspaceKey = assignment.workspaceKey,
                         hasStarterCode = assignment.hasStarterCode,
+                        starterDistributionPending = assignment.starterDistributionPending,
                         lifecycleStatus = assignment.lifecycleStatus,
                         scheduleStatus = assignment.scheduleStatus,
                         lastError = assignment.lastError?.let {
@@ -265,16 +304,28 @@ class UserService(
         }
 
         // 입력된 평문 courseKey와 DB에 저장된 해시된 courseKey를 비교하여 일치하는 강의 선택
-        val course = courses.firstOrNull { passwordEncoder.matches(courseKey, it.courseKey) }
-            ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Incorrect course key")
+        val matchedCourse = courses.firstOrNull { passwordEncoder.matches(courseKey, it.courseKey) }
+            ?: throw PublicApiException(HttpStatus.BAD_REQUEST, "INVALID_COURSE_KEY", "참가 코드가 올바르지 않습니다. 코드를 다시 확인해주세요.")
+        val course = courseRepository.findByIdForUpdate(matchedCourse.id)
+            .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
 
         if (course.status != CourseStatus.ACTIVE) {
             throw ResponseStatusException(HttpStatus.CONFLICT, "ACTIVE 상태의 강의에만 가입할 수 있습니다.")
+        }
+        if (!passwordEncoder.matches(courseKey, course.courseKey)) {
+            throw PublicApiException(HttpStatus.BAD_REQUEST, "INVALID_COURSE_KEY", "참가 코드가 변경되었습니다. 담당 교수에게 새 코드를 확인해주세요.")
         }
 
         // 사용자 조회
         val user = userRepository.findByEmail(email)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")
+        if (user.studentNum == null) {
+            throw PublicApiException(
+                HttpStatus.CONFLICT,
+                "PROFILE_INCOMPLETE",
+                "강의에 참여하려면 먼저 사용자 정보를 완료해주세요."
+            )
+        }
 
         val existingMembership = userCoursesRepository.findByUserIdAndCourseId(user.id, course.id)
         if (existingMembership != null) {
@@ -329,7 +380,7 @@ class UserService(
         val course = courseRepository.findById(courseId)
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
 
-        val userCourse = userCoursesRepository.findByUserIdAndCourseId(user.id, course.id)
+        val userCourse = userCoursesRepository.findByUserIdAndCourseIdForUpdate(user.id, course.id)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "User is not enrolled in this course")
 
         if (userCourse.lifecycleStatus in setOf(MembershipStatus.DELETE_PENDING, MembershipStatus.ARCHIVED)) return course.id
@@ -407,11 +458,22 @@ class UserService(
         if (newRole == RoleType.ASSISTANT && courseId == null) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "ASSISTANT 권한은 특정 강의에 대해서만 설정할 수 있습니다.")
         }
+        if (newRole == RoleType.ADMIN && courseId != null) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "ADMIN은 전역 권한으로만 설정할 수 있습니다.")
+        }
 
         if (courseId != null) {
+            val course = courseRepository.findByIdForUpdate(courseId)
+                .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
+            if (course.status != CourseStatus.ACTIVE) {
+                throw ResponseStatusException(HttpStatus.CONFLICT, "ACTIVE 상태의 강의에서만 권한을 변경할 수 있습니다.")
+            }
             if (currentUser.role != RoleType.ADMIN) {
                 val actorMembership = userCoursesRepository.findByUserIdAndCourseId(currentUser.id, courseId)
                     ?: throw ResponseStatusException(HttpStatus.FORBIDDEN, "해당 강의에 소속되어 있지 않습니다.")
+                if (actorMembership.lifecycleStatus != MembershipStatus.READY) {
+                    throw ResponseStatusException(HttpStatus.FORBIDDEN, "활성 상태의 강의 소속만 권한을 변경할 수 있습니다.")
+                }
                 if (actorMembership.role != RoleType.PROFESSOR) {
                     throw ResponseStatusException(HttpStatus.FORBIDDEN, "해당 강의의 담당 교수 권한이 없습니다.")
                 }
@@ -420,27 +482,66 @@ class UserService(
                 }
             }
 
-            val userCourse = userCoursesRepository.findByUserIdAndCourseId(targetUser.id, courseId)
+            val userCourse = userCoursesRepository.findByUserIdAndCourseIdForUpdate(targetUser.id, courseId)
                 ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "User is not enrolled in this course")
-
-            val course = userCourse.course
-            // 새 역할이 ASSISTANT, PROFESSOR로 설정되었을 때는 강의의 관리자로 등록 (redis)
-            if (newRole == RoleType.ASSISTANT || newRole == RoleType.PROFESSOR) {
-                redisService.addUserToCourseManagerList(course.infrastructureKey, course.clss, targetUser.email)
+            if (userCourse.lifecycleStatus != MembershipStatus.READY) {
+                throw ResponseStatusException(HttpStatus.CONFLICT, "활성 상태의 강의 소속만 권한을 변경할 수 있습니다.")
             }
-            // 새 역할이 STUDENT로 설정되었을 때는 강의의 관리자에서 등록 해제 (redis) + user_courses 엔티티의 role도 STUDENT로 업데이트
+            if (currentUser.role != RoleType.ADMIN && userCourse.role == RoleType.PROFESSOR) {
+                throw ResponseStatusException(HttpStatus.FORBIDDEN, "교수 권한은 관리자만 변경할 수 있습니다.")
+            }
+            if (userCourse.role == newRole) return
+
+            val becomingStudent = newRole == RoleType.STUDENT && userCourse.role != RoleType.STUDENT
+            if (becomingStudent && targetUser.studentNum == null) {
+                throw PublicApiException(
+                    HttpStatus.CONFLICT,
+                    "PROFILE_INCOMPLETE",
+                    "학생 권한으로 변경하려면 대상 사용자의 정보를 먼저 완료해야 합니다."
+                )
+            }
+            redisService.revokeViewerProfiles(targetUser.id)
+            // 권한 승격은 DB 커밋 후 캐시에 게시해 롤백 시 과권한이 남지 않게 한다.
+            if (newRole == RoleType.ASSISTANT || newRole == RoleType.PROFESSOR) {
+                afterCommit {
+                    redisService.addUserToCourseManagerList(
+                        course.infrastructureKey,
+                        course.clss,
+                        targetUser.email
+                    )
+                }
+            }
+            // 권한 강등은 캐시와 기존 세션을 먼저 차단하는 fail-closed 순서를 사용한다.
             else if (newRole == RoleType.STUDENT) {
                 redisService.removeUserFromCourseManagerList(course.infrastructureKey, course.clss, targetUser.email)
             }
 
             userCourse.role = newRole
+            if (becomingStudent) {
+                userCourse.lifecycleStatus = MembershipStatus.PROVISIONING
+                userCourse.lastError = null
+            }
             userCoursesRepository.save(userCourse)
+            if (becomingStudent) {
+                jCodeService.expireManagerOnlySessions(userCourse)
+                workspaceOperationStore.enqueue(
+                    WorkspaceOperationTarget.MEMBERSHIP,
+                    userCourse.id,
+                    WorkspaceOperationAction.PROVISION_MEMBERSHIP
+                )
+            } else if (newRole != RoleType.STUDENT) {
+                jCodeService.expireStudentOnlySessions(userCourse)
+            }
+            workspacePolicyRevisionService.bump(course.id)
         } else {
             if (currentUser.role != RoleType.ADMIN) {
                 throw ResponseStatusException(HttpStatus.FORBIDDEN, "전역 권한은 관리자만 변경할 수 있습니다.")
             }
+            if (targetUser.role == newRole) return
+            redisService.revokeViewerProfiles(targetUser.id)
             targetUser.role = newRole
             userRepository.save(targetUser)
+            afterCommit { redisService.revokeViewerProfiles(targetUser.id) }
         }
     }
 
@@ -449,6 +550,17 @@ class UserService(
     fun deleteUser(userId: Long) {
         val user = userRepository.findById(userId)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "User not found with id: $userId")
+        if (userCoursesRepository.findByUserId(userId).isNotEmpty()) {
+            throw PublicApiException(
+                HttpStatus.CONFLICT,
+                "USER_HAS_COURSE_HISTORY",
+                "강의 이력이 있는 사용자는 강의별 종료·보관 절차 없이 삭제할 수 없습니다."
+            )
+        }
+        redisService.revokeViewerProfiles(user.id)
+        redisService.deleteIdToken(user.email)
+        redisService.deleteRefreshToken(user.email)
+        loginRepository.findByUserId(user.id)?.let(loginRepository::delete)
         userRepository.delete(user)
     }
 
@@ -467,13 +579,19 @@ class UserService(
         if (currentUser.role != RoleType.ADMIN) {
             val currentUserCourse = userCoursesRepository.findByUserIdAndCourseId(currentUser.id, course.id)
                 ?: throw ResponseStatusException(HttpStatus.FORBIDDEN, "이 강의에 대한 권한이 없습니다.")
-            if (currentUserCourse.role != RoleType.PROFESSOR) {
+            if (currentUserCourse.lifecycleStatus != MembershipStatus.READY ||
+                currentUserCourse.role != RoleType.PROFESSOR
+            ) {
                 throw ResponseStatusException(HttpStatus.FORBIDDEN, "이 강의의 담당 교수 권한이 없습니다.")
             }
         }
 
-        val userCourse = userCoursesRepository.findByUserIdAndCourseId(user.id, course.id)
+        val userCourse = userCoursesRepository.findByUserIdAndCourseIdForUpdate(user.id, course.id)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "User is not enrolled in this course")
+
+        if (currentUser.role != RoleType.ADMIN && userCourse.role == RoleType.PROFESSOR) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "교수는 관리자만 강의에서 제외할 수 있습니다.")
+        }
 
         if (userCourse.lifecycleStatus in setOf(MembershipStatus.DELETE_PENDING, MembershipStatus.ARCHIVED)) return course.id
         userCourse.lifecycleStatus = MembershipStatus.DELETE_PENDING

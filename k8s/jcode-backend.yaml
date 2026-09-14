@@ -33,6 +33,11 @@ spec:
           value: Asia/Seoul
         - name: SPRING_JACKSON_TIME_ZONE
           value: Asia/Seoul
+        - name: WATCHER_QUERY_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: watcher-query-auth
+              key: token
         envFrom:
         - configMapRef:
             name: jcode-backend-config

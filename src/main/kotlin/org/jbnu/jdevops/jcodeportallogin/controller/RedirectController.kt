@@ -12,6 +12,7 @@ import org.jbnu.jdevops.jcodeportallogin.repo.JCodeRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.UserCoursesRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.UserRepository
 import org.jbnu.jdevops.jcodeportallogin.service.RedisService
+import org.jbnu.jdevops.jcodeportallogin.exception.PublicApiException
 import org.jbnu.jdevops.jcodeportallogin.service.JCodeRuntimeObserver
 import org.jbnu.jdevops.jcodeportallogin.util.AuthorizationUtil
 import org.jbnu.jdevops.jcodeportallogin.util.JwtUtil
@@ -24,6 +25,8 @@ import org.springframework.web.bind.annotation.*
 import org.springframework.web.server.ResponseStatusException
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.time.Instant
+import java.time.ZoneId
 
 @Tag(name = "Redirect API", description = "JCode(Node.js 서버)로의 리다이렉션 관련 API")
 @RestController
@@ -36,7 +39,10 @@ class RedirectController(
     private val courseRepository: CourseRepository,
     private val assignmentRepository: AssignmentRepository,
     private val userCoursesRepository: UserCoursesRepository,
-    private val jCodeRuntimeObserver: JCodeRuntimeObserver
+    private val jCodeRuntimeObserver: JCodeRuntimeObserver,
+    private val workspaceAccessPolicy: org.jbnu.jdevops.jcodeportallogin.service.WorkspaceAccessPolicy,
+    private val workspaceOperationStore: org.jbnu.jdevops.jcodeportallogin.service.WorkspaceOperationStore,
+    private val jCodeService: org.jbnu.jdevops.jcodeportallogin.service.JCodeService
 ) {
 
     @Value("\${router.url}")  // 환경 변수에서 Node.js URL 가져오기
@@ -69,10 +75,15 @@ class RedirectController(
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
 
         if (course.status != CourseStatus.ACTIVE) {
-            throw ResponseStatusException(HttpStatus.CONFLICT, "종료되거나 아카이브된 강의에는 진입할 수 없습니다.")
+            throw PublicApiException(HttpStatus.CONFLICT, "COURSE_UNAVAILABLE", "종료되거나 보관된 강의에는 진입할 수 없습니다.")
         }
-        if (!userCoursesRepository.existsByUserIdAndCourseId(user.id, course.id)) {
-            throw ResponseStatusException(HttpStatus.FORBIDDEN, "대상 사용자가 해당 강의에 소속되어 있지 않습니다.")
+        val targetMembership = userCoursesRepository.findByUserIdAndCourseId(user.id, course.id)
+            ?: throw ResponseStatusException(HttpStatus.FORBIDDEN, "대상 사용자가 해당 강의에 소속되어 있지 않습니다.")
+        if (targetMembership.lifecycleStatus != org.jbnu.jdevops.jcodeportallogin.entity.MembershipStatus.READY) {
+            throw PublicApiException(HttpStatus.CONFLICT, "MEMBERSHIP_PREPARING", "대상 사용자의 강의 참여 환경을 준비하고 있습니다.")
+        }
+        if (user.studentNum == null) {
+            throw PublicApiException(HttpStatus.CONFLICT, "PROFILE_INCOMPLETE", "대상 사용자의 정보가 완료되지 않았습니다.")
         }
         AuthorizationUtil.validateUserAuthority(
             currentUser.role,
@@ -81,10 +92,56 @@ class RedirectController(
             course.id,
             userCoursesRepository
         )
+        if (redirectRequest.snapshot && currentUser.role != org.jbnu.jdevops.jcodeportallogin.entity.RoleType.ADMIN) {
+            val viewerMembership = userCoursesRepository.findByUserIdAndCourseId(currentUser.id, course.id)
+            if (viewerMembership?.lifecycleStatus != org.jbnu.jdevops.jcodeportallogin.entity.MembershipStatus.READY ||
+                viewerMembership.role !in setOf(
+                    org.jbnu.jdevops.jcodeportallogin.entity.RoleType.PROFESSOR,
+                    org.jbnu.jdevops.jcodeportallogin.entity.RoleType.ASSISTANT
+                )
+            ) {
+                throw ResponseStatusException(HttpStatus.FORBIDDEN, "해당 강의의 Snapshot JCode 접근 권한이 없습니다.")
+            }
+        }
 
-        val storedJcode = if (!redirectRequest.snapshot && course.workspaceScope == org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceScope.ASSIGNMENT && redirectRequest.assignmentId != null) {
-            jCodeRepository.findFirstByUserIdAndCourseIdAndSnapshotAndAssignmentIdAndLifecycleStatusNotOrderByIdDesc(
-                user.id, course.id, redirectRequest.snapshot, redirectRequest.assignmentId,
+        val assignment = if (!redirectRequest.snapshot && redirectRequest.assignmentId != null) {
+            assignmentRepository.findByIdAndCourseId(redirectRequest.assignmentId, course.id)
+                .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Assignment not found in course") }
+        } else null
+        val ownerStudent = currentUser.id == user.id &&
+            currentUser.role != org.jbnu.jdevops.jcodeportallogin.entity.RoleType.ADMIN &&
+            targetMembership.role == org.jbnu.jdevops.jcodeportallogin.entity.RoleType.STUDENT
+        if (currentUser.id != user.id && assignment == null) {
+            throw ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "다른 학생의 JCode는 과제별 읽기 전용 검사로만 열 수 있습니다."
+            )
+        }
+        if (assignment != null) {
+            val accessible = if (ownerStudent) {
+                workspaceAccessPolicy.isStudentAccessible(assignment)
+            } else {
+                assignment.lifecycleStatus == org.jbnu.jdevops.jcodeportallogin.entity.AssignmentLifecycleStatus.ACTIVE
+            }
+            if (!accessible) {
+                throw PublicApiException(HttpStatus.CONFLICT, "ASSIGNMENT_NOT_ACCESSIBLE", "현재 접근할 수 없는 과제입니다.")
+            }
+        }
+
+        val inspectorMode = assignment != null && !ownerStudent
+        if (assignment != null && !inspectorMode &&
+            course.workspaceScope == org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceScope.COURSE &&
+            !workspaceOperationStore.assignmentMetadataReady(assignment.id, targetMembership.id)
+        ) {
+            // Keep the existing client's preparation retry contract during metadata updates.
+            throw PublicApiException(HttpStatus.CONFLICT, "JCODE_POLICY_APPLYING", "과제 표시 정보를 갱신하고 있습니다. 잠시 후 자동으로 연결됩니다.")
+        }
+        val storedJcode = if (inspectorMode) {
+            jCodeService.ensureInspector(currentEmail, user.email, course.id, assignment!!.id)
+        } else if (!redirectRequest.snapshot && course.workspaceScope == org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceScope.ASSIGNMENT && assignment != null) {
+            jCodeRepository.findFirstByUserIdAndCourseIdAndAssignmentIdAndKindAndLifecycleStatusNotOrderByIdDesc(
+                user.id, course.id, assignment.id,
+                org.jbnu.jdevops.jcodeportallogin.entity.JcodeKind.STANDARD,
                 org.jbnu.jdevops.jcodeportallogin.entity.JcodeLifecycleStatus.ARCHIVED
             )
         } else {
@@ -93,46 +150,80 @@ class RedirectController(
                 org.jbnu.jdevops.jcodeportallogin.entity.JcodeLifecycleStatus.ARCHIVED
             )
         }
-            ?: throw ResponseStatusException(HttpStatus.CONFLICT, "활성 JCode가 없습니다.")
+            ?: throw PublicApiException(HttpStatus.CONFLICT, "JCODE_NOT_FOUND", "활성 JCode가 없습니다.")
         if (storedJcode.lifecycleStatus != org.jbnu.jdevops.jcodeportallogin.entity.JcodeLifecycleStatus.READY) {
-            throw ResponseStatusException(HttpStatus.CONFLICT, "JCode 준비가 아직 완료되지 않았습니다.")
+            val code = if (storedJcode.lifecycleStatus == org.jbnu.jdevops.jcodeportallogin.entity.JcodeLifecycleStatus.PROVISIONING) {
+                "JCODE_PREPARING"
+            } else {
+                "JCODE_RECOVERY_REQUIRED"
+            }
+            throw PublicApiException(
+                HttpStatus.CONFLICT,
+                code,
+                if (code == "JCODE_PREPARING") "JCode 실행 환경을 준비하고 있습니다." else "JCode 실행 환경 복구가 필요합니다."
+            )
+        }
+        val plan = workspaceAccessPolicy.plan(storedJcode)
+        if (
+            storedJcode.observedRevision != storedJcode.desiredRevision ||
+            storedJcode.observedMountHash != plan.mountHash
+        ) {
+            workspaceOperationStore.enqueueJcodeAccessReconcile(storedJcode.id, storedJcode.desiredRevision)
+            throw PublicApiException(HttpStatus.CONFLICT, "JCODE_POLICY_APPLYING", "JCode 접근 정책을 적용하고 있습니다.")
         }
         jCodeRuntimeObserver.requireReady(storedJcode.id)
         val jcodeUrl = storedJcode.jcodeUrl
-            ?: throw ResponseStatusException(HttpStatus.CONFLICT, "JCode 주소가 아직 준비되지 않았습니다.")
+            ?: throw PublicApiException(HttpStatus.CONFLICT, "JCODE_PREPARING", "JCode 주소를 준비하고 있습니다.")
 
-        // 사용자 프로필 정보를 Redis에 저장하고 UUID를 획득 & UUID를 UTF-8로 URL 인코딩
+        val defaultExpiry = Instant.now().plusSeconds(6 * 3600)
+        val expiresAt = if (inspectorMode) {
+            storedJcode.expiresAt?.atZone(ZoneId.systemDefault())?.toInstant()
+                ?: Instant.now().plusSeconds(30 * 60)
+        } else if (ownerStudent && plan.validUntil != null) {
+            minOf(defaultExpiry, plan.validUntil.atZone(ZoneId.systemDefault()).toInstant())
+        } else {
+            defaultExpiry
+        }
+
+        // 모든 검증이 끝난 뒤에만 짧은 수명의 Router 세션을 만든다.
         val uuid = redisService.storeUserProfile(
             user.email,
             user.studentNum.toString(),
             course.infrastructureKey,
             course.clss.toString(),
             redirectRequest.snapshot.toString(),
-            storedJcode.id
+            storedJcode.id,
+            currentUser.id,
+            currentUser.email,
+            targetMembership.id,
+            assignment?.id,
+            if (inspectorMode) "INSPECTOR" else "OWNER",
+            storedJcode.observedRevision,
+            plan.mountHash,
+            expiresAt
         )
         val encodedUUID = URLEncoder.encode(uuid, StandardCharsets.UTF_8.toString()).replace("+", "%2B")
 
-        // 학생 Jcode 정보 Redis 동기화
-        if (redirectRequest.snapshot) redisService.storeSnapshotUserCourse(user.email, course.infrastructureKey, course.clss, jcodeUrl)
-        else redisService.storeUserCourse(user.email, course.infrastructureKey, course.clss, jcodeUrl)
-        redisService.storeJcodeRoute(storedJcode.id, jcodeUrl)
+        // New sessions use only the JCode-id route below. Recreating the legacy
+        // user/course route would let an old v2 profile bypass revision invalidation.
+        redisService.storeJcodeRoute(
+            storedJcode.id,
+            jcodeUrl,
+            storedJcode.observedRevision,
+            plan.mountHash
+        )
+        storedJcode.lastRoutedAt = java.time.LocalDateTime.now()
+        jCodeRepository.save(storedJcode)
 
         // 과제별 폴더 경로 결정
         var workspaceFile: String? = null
-        val folderPath = if (!redirectRequest.snapshot && redirectRequest.assignmentId != null) {
-            val assignment = assignmentRepository.findByIdAndCourseId(redirectRequest.assignmentId, course.id)
-                .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Assignment not found in course") }
-            if (assignment.lifecycleStatus != org.jbnu.jdevops.jcodeportallogin.entity.AssignmentLifecycleStatus.ACTIVE ||
-                assignment.scheduleStatus != org.jbnu.jdevops.jcodeportallogin.entity.AssignmentScheduleStatus.OPEN
-            ) {
-                throw ResponseStatusException(HttpStatus.CONFLICT, "현재 열려 있는 과제만 IDE에 진입할 수 있습니다.")
-            }
-            if (course.workspaceScope == org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceScope.ASSIGNMENT) {
+        val folderPath = if (!redirectRequest.snapshot && assignment != null) {
+            if (inspectorMode || course.workspaceScope == org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceScope.ASSIGNMENT) {
                 "/home/coder/project"
             } else {
                 val assignmentWorkspaceFile = WorkspaceNaming.assignmentWorkspaceFile(assignment.name)
                 workspaceFile = "/home/coder/project/.jcode/assignments/${assignment.workspaceKey}/$assignmentWorkspaceFile"
-                "/home/coder/project/${assignment.workspaceKey}"
+                "/home/coder/project/assignments/${assignment.workspaceKey}"
             }
         } else {
             if (!redirectRequest.snapshot && course.workspaceScope == org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceScope.COURSE) {

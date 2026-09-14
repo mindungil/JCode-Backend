@@ -8,6 +8,7 @@ import org.jbnu.jdevops.jcodeportallogin.entity.UserCourses
 import org.jbnu.jdevops.jcodeportallogin.entity.MembershipStatus
 import org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceOperationAction
 import org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceOperationTarget
+import org.jbnu.jdevops.jcodeportallogin.exception.PublicApiException
 import org.jbnu.jdevops.jcodeportallogin.repo.AssignmentRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.CourseRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.JCodeRepository
@@ -44,6 +45,7 @@ class UserServiceRbacTest {
     private val redisService = RedisService(redisTemplate)
     private val jCodeService = mock(JCodeService::class.java)
     private val workspaceOperationStore = mock(WorkspaceOperationStore::class.java)
+    private val workspacePolicyRevisionService = mock(WorkspacePolicyRevisionService::class.java)
 
     private val service = UserService(
         userRepository,
@@ -55,7 +57,8 @@ class UserServiceRbacTest {
         courseRepository,
         redisService,
         jCodeService,
-        workspaceOperationStore
+        workspaceOperationStore,
+        workspacePolicyRevisionService
     )
 
     init {
@@ -88,14 +91,16 @@ class UserServiceRbacTest {
         val course = course()
         val professor = user(1, "professor@example.com", RoleType.PROFESSOR)
         val student = user(2, "student@example.com", RoleType.STUDENT)
-        val professorCourse = userCourse(professor, course, RoleType.PROFESSOR)
+        val professorCourse = userCourse(professor, course, RoleType.PROFESSOR).also {
+            it.lifecycleStatus = MembershipStatus.READY
+        }
         val targetUserCourse = userCourse(student, course, RoleType.STUDENT)
 
         `when`(userRepository.findByEmail(professor.email)).thenReturn(professor)
         `when`(userRepository.findById(student.id)).thenReturn(student)
         `when`(courseRepository.findById(course.id)).thenReturn(Optional.of(course))
         `when`(userCoursesRepository.findByUserIdAndCourseId(professor.id, course.id)).thenReturn(professorCourse)
-        `when`(userCoursesRepository.findByUserIdAndCourseId(student.id, course.id)).thenReturn(targetUserCourse)
+        `when`(userCoursesRepository.findByUserIdAndCourseIdForUpdate(student.id, course.id)).thenReturn(targetUserCourse)
         val result = service.chaseOutCourse(student.id, course.id, professor.email, "token")
 
         assertEquals(course.id, result)
@@ -119,6 +124,7 @@ class UserServiceRbacTest {
 
         `when`(courseRepository.findByInfrastructureKeyAndClss(course.infrastructureKey, course.clss)).thenReturn(listOf(course))
         `when`(passwordEncoder.matches(rawKey, course.courseKey)).thenReturn(true)
+        `when`(courseRepository.findByIdForUpdate(course.id)).thenReturn(Optional.of(course))
         `when`(userRepository.findByEmail(user.email)).thenReturn(user)
 
         val ex = assertThrows<ResponseStatusException> {
@@ -137,6 +143,7 @@ class UserServiceRbacTest {
 
         `when`(courseRepository.findByInfrastructureKeyAndClss(course.infrastructureKey, course.clss)).thenReturn(listOf(course))
         `when`(passwordEncoder.matches(rawKey, course.courseKey)).thenReturn(true)
+        `when`(courseRepository.findByIdForUpdate(course.id)).thenReturn(Optional.of(course))
         `when`(userRepository.findByEmail(professor.email)).thenReturn(professor)
         `when`(userCoursesRepository.findByUserIdAndCourseId(professor.id, course.id)).thenReturn(null)
 
@@ -164,6 +171,126 @@ class UserServiceRbacTest {
 
         assertEquals(RoleType.PROFESSOR, target.role)
         verify(userRepository).save(target)
+        verify(userCoursesRepository, never()).save(any(UserCourses::class.java))
+    }
+
+    @Test
+    fun `course promotion expires student-only sessions and refreshes workspace policy`() {
+        val course = course()
+        val professor = user(1, "professor@example.com", RoleType.STUDENT)
+        val target = user(2, "student@example.com", RoleType.STUDENT)
+        val professorMembership = userCourse(professor, course, RoleType.PROFESSOR).also {
+            it.lifecycleStatus = MembershipStatus.READY
+        }
+        val targetMembership = userCourse(target, course, RoleType.STUDENT).also {
+            it.lifecycleStatus = MembershipStatus.READY
+        }
+        `when`(userRepository.findByEmail(professor.email)).thenReturn(professor)
+        `when`(userRepository.findById(target.id)).thenReturn(target)
+        `when`(courseRepository.findByIdForUpdate(course.id)).thenReturn(Optional.of(course))
+        `when`(userCoursesRepository.findByUserIdAndCourseId(professor.id, course.id))
+            .thenReturn(professorMembership)
+        `when`(userCoursesRepository.findByUserIdAndCourseIdForUpdate(target.id, course.id))
+            .thenReturn(targetMembership)
+
+        service.updateUserRole(professor.email, target.id, RoleType.ASSISTANT, course.id)
+
+        assertEquals(RoleType.ASSISTANT, targetMembership.role)
+        verify(jCodeService).expireStudentOnlySessions(targetMembership)
+        verify(workspacePolicyRevisionService).bump(course.id)
+    }
+
+    @Test
+    fun `course manager demotion prepares student workspace before exposing membership`() {
+        val course = course()
+        val admin = user(1, "admin@example.com", RoleType.ADMIN)
+        val target = user(2, "professor@example.com", RoleType.PROFESSOR)
+        val targetMembership = userCourse(target, course, RoleType.PROFESSOR).also {
+            it.lifecycleStatus = MembershipStatus.READY
+        }
+        `when`(userRepository.findByEmail(admin.email)).thenReturn(admin)
+        `when`(userRepository.findById(target.id)).thenReturn(target)
+        `when`(courseRepository.findByIdForUpdate(course.id)).thenReturn(Optional.of(course))
+        `when`(userCoursesRepository.findByUserIdAndCourseIdForUpdate(target.id, course.id))
+            .thenReturn(targetMembership)
+
+        service.updateUserRole(admin.email, target.id, RoleType.STUDENT, course.id)
+
+        assertEquals(RoleType.STUDENT, targetMembership.role)
+        assertEquals(MembershipStatus.PROVISIONING, targetMembership.lifecycleStatus)
+        verify(jCodeService).expireManagerOnlySessions(targetMembership)
+        verify(workspaceOperationStore).enqueue(
+            WorkspaceOperationTarget.MEMBERSHIP,
+            targetMembership.id,
+            WorkspaceOperationAction.PROVISION_MEMBERSHIP
+        )
+        verify(workspacePolicyRevisionService).bump(course.id)
+    }
+
+    @Test
+    fun `student without workspace identifier cannot join course`() {
+        val course = course()
+        val student = User(id = 2, email = "student@example.com", role = RoleType.STUDENT, studentNum = null)
+        val rawKey = "ALG-1-secret"
+        `when`(courseRepository.findByInfrastructureKeyAndClss(course.infrastructureKey, course.clss)).thenReturn(listOf(course))
+        `when`(passwordEncoder.matches(rawKey, course.courseKey)).thenReturn(true)
+        `when`(courseRepository.findByIdForUpdate(course.id)).thenReturn(Optional.of(course))
+        `when`(userRepository.findByEmail(student.email)).thenReturn(student)
+
+        val error = assertThrows<PublicApiException> {
+            service.joinCourse(student.email, rawKey)
+        }
+
+        assertEquals(HttpStatus.CONFLICT, error.status)
+        verify(userCoursesRepository, never()).saveAndFlush(any(UserCourses::class.java))
+    }
+
+    @Test
+    fun `manager without workspace identifier cannot be demoted to student`() {
+        val course = course()
+        val admin = user(1, "admin@example.com", RoleType.ADMIN)
+        val target = User(id = 2, email = "professor@example.com", role = RoleType.PROFESSOR, studentNum = null)
+        val membership = userCourse(target, course, RoleType.PROFESSOR).also {
+            it.lifecycleStatus = MembershipStatus.READY
+        }
+        `when`(userRepository.findByEmail(admin.email)).thenReturn(admin)
+        `when`(userRepository.findById(target.id)).thenReturn(target)
+        `when`(courseRepository.findByIdForUpdate(course.id)).thenReturn(Optional.of(course))
+        `when`(userCoursesRepository.findByUserIdAndCourseIdForUpdate(target.id, course.id)).thenReturn(membership)
+
+        val error = assertThrows<PublicApiException> {
+            service.updateUserRole(admin.email, target.id, RoleType.STUDENT, course.id)
+        }
+
+        assertEquals(HttpStatus.CONFLICT, error.status)
+        assertEquals(RoleType.PROFESSOR, membership.role)
+        verify(userCoursesRepository, never()).save(membership)
+    }
+
+    @Test
+    fun `user with course history cannot be deleted directly`() {
+        val target = user(2, "student@example.com", RoleType.STUDENT)
+        `when`(userRepository.findById(target.id)).thenReturn(target)
+        `when`(userCoursesRepository.findByUserId(target.id)).thenReturn(listOf(userCourse(target, course(), RoleType.STUDENT)))
+
+        val error = assertThrows<PublicApiException> { service.deleteUser(target.id) }
+
+        assertEquals(HttpStatus.CONFLICT, error.status)
+        verify(userRepository, never()).delete(target)
+    }
+
+    @Test
+    fun `admin role cannot be stored as a course membership role`() {
+        val admin = user(1, "admin@example.com", RoleType.ADMIN)
+        val target = user(2, "student@example.com", RoleType.STUDENT)
+        `when`(userRepository.findByEmail(admin.email)).thenReturn(admin)
+        `when`(userRepository.findById(target.id)).thenReturn(target)
+
+        val error = assertThrows<ResponseStatusException> {
+            service.updateUserRole(admin.email, target.id, RoleType.ADMIN, course().id)
+        }
+
+        assertEquals(HttpStatus.BAD_REQUEST, error.statusCode)
         verify(userCoursesRepository, never()).save(any(UserCourses::class.java))
     }
 

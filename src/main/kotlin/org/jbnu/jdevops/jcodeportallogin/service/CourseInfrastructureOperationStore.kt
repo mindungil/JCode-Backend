@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.domain.PageRequest
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import org.springframework.transaction.annotation.Isolation
 import java.time.LocalDateTime
 import kotlin.math.min
 
@@ -35,13 +36,15 @@ class CourseInfrastructureOperationStore(
 
     @Transactional
     fun enqueue(courseId: Long, action: CourseInfrastructureAction) {
-        if (operationRepository.existsByCourseIdAndStatusIn(courseId, activeStatuses)) {
+        if (action != CourseInfrastructureAction.SYNC_NAMESPACE_METADATA &&
+            operationRepository.existsByCourseIdAndActionAndStatusIn(courseId, action, activeStatuses)
+        ) {
             return
         }
         operationRepository.save(CourseInfrastructureOperation(courseId = courseId, action = action))
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     fun claimNext(): ClaimedCourseInfrastructureOperation? {
         val now = LocalDateTime.now()
         val operation = operationRepository.findReadyForUpdate(
@@ -71,9 +74,11 @@ class CourseInfrastructureOperationStore(
         courseRepository.findById(operation.courseId).orElse(null)
 
     @Transactional
-    fun markSucceeded(operationId: Long) {
-        val operation = operationRepository.findById(operationId).orElseThrow()
-        if (operation.status != CourseInfrastructureOperationStatus.PROCESSING) return
+    fun markSucceeded(claimed: ClaimedCourseInfrastructureOperation) {
+        val operation = operationRepository.findById(claimed.id).orElseThrow()
+        if (operation.status != CourseInfrastructureOperationStatus.PROCESSING ||
+            operation.attempts != claimed.attempts
+        ) return
         val course = courseRepository.findById(operation.courseId).orElse(null)
         if (course != null) {
             when (operation.action) {
@@ -81,20 +86,20 @@ class CourseInfrastructureOperationStore(
                     if (course.status == CourseStatus.PROVISIONING) {
                         course.status = CourseStatus.ACTIVE
                         course.endedAt = null
+                        course.workspaceRuntimeEnabled = true
                     }
-                    course.workspaceRuntimeEnabled = true
                 }
                 CourseInfrastructureAction.SYNC_NAMESPACE_METADATA -> Unit
                 CourseInfrastructureAction.DELETE_WORKLOADS -> {
-                    course.workspaceRuntimeEnabled = false
                     if (course.status == CourseStatus.TERMINATING) {
+                        course.workspaceRuntimeEnabled = false
                         course.status = CourseStatus.ENDED
                         course.endedAt = LocalDateTime.now()
                     }
                 }
                 CourseInfrastructureAction.DELETE_NAMESPACE -> {
-                    course.workspaceRuntimeEnabled = false
                     if (course.status == CourseStatus.ARCHIVING) {
+                        course.workspaceRuntimeEnabled = false
                         course.status = CourseStatus.ARCHIVED
                         course.namespaceKey = null
                     }
@@ -110,9 +115,11 @@ class CourseInfrastructureOperationStore(
     }
 
     @Transactional
-    fun markFailed(operationId: Long, error: Throwable) {
-        val operation = operationRepository.findById(operationId).orElseThrow()
-        if (operation.status != CourseInfrastructureOperationStatus.PROCESSING) return
+    fun markFailed(claimed: ClaimedCourseInfrastructureOperation, error: Throwable) {
+        val operation = operationRepository.findById(claimed.id).orElseThrow()
+        if (operation.status != CourseInfrastructureOperationStatus.PROCESSING ||
+            operation.attempts != claimed.attempts
+        ) return
         val now = LocalDateTime.now()
         operation.lastError = (error.message ?: error.javaClass.simpleName).take(4000)
         operation.lockedAt = null
@@ -121,8 +128,16 @@ class CourseInfrastructureOperationStore(
             operation.status = CourseInfrastructureOperationStatus.FAILED
             if (operation.action != CourseInfrastructureAction.SYNC_NAMESPACE_METADATA) {
                 courseRepository.findById(operation.courseId).ifPresent { course ->
-                    course.status = CourseStatus.ERROR
-                    courseRepository.save(course)
+                    val ownsCurrentState = when (operation.action) {
+                        CourseInfrastructureAction.PROVISION_NAMESPACE -> course.status == CourseStatus.PROVISIONING
+                        CourseInfrastructureAction.DELETE_WORKLOADS -> course.status == CourseStatus.TERMINATING
+                        CourseInfrastructureAction.DELETE_NAMESPACE -> course.status == CourseStatus.ARCHIVING
+                        CourseInfrastructureAction.SYNC_NAMESPACE_METADATA -> false
+                    }
+                    if (ownsCurrentState) {
+                        course.status = CourseStatus.ERROR
+                        courseRepository.save(course)
+                    }
                 }
             }
         } else {
@@ -130,6 +145,22 @@ class CourseInfrastructureOperationStore(
             val delaySeconds = min(300L, 1L shl min(operation.attempts, 8))
             operation.nextAttemptAt = now.plusSeconds(delaySeconds)
         }
+        operationRepository.save(operation)
+    }
+
+    @Transactional
+    fun defer(claimed: ClaimedCourseInfrastructureOperation, delaySeconds: Long = 3) {
+        val operation = operationRepository.findById(claimed.id).orElseThrow()
+        if (operation.status != CourseInfrastructureOperationStatus.PROCESSING ||
+            operation.attempts != claimed.attempts
+        ) return
+        val now = LocalDateTime.now()
+        operation.status = CourseInfrastructureOperationStatus.PENDING
+        operation.attempts = (operation.attempts - 1).coerceAtLeast(0)
+        operation.nextAttemptAt = now.plusSeconds(delaySeconds)
+        operation.lockedAt = null
+        operation.lastError = null
+        operation.updatedAt = now
         operationRepository.save(operation)
     }
 
@@ -146,6 +177,10 @@ class CourseInfrastructureOperationStore(
         )
         val now = LocalDateTime.now()
         operationRepository.findByCourseIdAndStatusIn(courseId, cancellable).forEach { operation ->
+            // A PROCESSING namespace request may still complete in Generator even after
+            // the HTTP client is cancelled. Keep it ahead of DELETE_NAMESPACE so cleanup
+            // cannot observe 404 and finish before that late creation.
+            if (operation.status == CourseInfrastructureOperationStatus.PROCESSING) return@forEach
             operation.status = CourseInfrastructureOperationStatus.CANCELLED
             operation.lockedAt = null
             operation.updatedAt = now

@@ -16,9 +16,10 @@ enum class WorkspaceOperationAction {
     PROVISION_MEMBERSHIP,
     DELETE_MEMBERSHIP,
     PROVISION_JCODE,
+    RECONCILE_JCODE_ACCESS,
     DELETE_JCODE
 }
-enum class WorkspaceOperationStatus { PENDING, PROCESSING, SUCCEEDED, FAILED }
+enum class WorkspaceOperationStatus { PENDING, PROCESSING, SUCCEEDED, SUPERSEDED, FAILED }
 
 @Entity
 @Table(name = "workspace_operation")
@@ -39,6 +40,9 @@ class WorkspaceOperation(
 
     @Column(name = "artifact_id")
     val artifactId: Long? = null,
+
+    @Column(name = "desired_revision")
+    val desiredRevision: Long? = null,
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 16)

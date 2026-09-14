@@ -4,6 +4,7 @@ import org.jbnu.jdevops.jcodeportallogin.entity.Course
 import org.jbnu.jdevops.jcodeportallogin.entity.RoleType
 import org.jbnu.jdevops.jcodeportallogin.entity.User
 import org.jbnu.jdevops.jcodeportallogin.entity.UserCourses
+import org.jbnu.jdevops.jcodeportallogin.entity.MembershipStatus
 import org.jbnu.jdevops.jcodeportallogin.repo.UserCoursesRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
@@ -59,6 +60,7 @@ class AuthorizationUtilTest {
     )
 
     private fun membership(user: User, role: RoleType) = UserCourses(
-        id = user.id, user = user, course = course, role = role
+        id = user.id, user = user, course = course, role = role,
+        lifecycleStatus = MembershipStatus.READY
     )
 }

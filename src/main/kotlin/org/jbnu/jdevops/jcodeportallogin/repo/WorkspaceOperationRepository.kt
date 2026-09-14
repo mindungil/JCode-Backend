@@ -10,6 +10,12 @@ import org.springframework.data.repository.query.Param
 import java.time.LocalDateTime
 
 interface WorkspaceOperationRepository : JpaRepository<WorkspaceOperation, Long> {
+    fun findTopByTargetTypeAndTargetIdAndActionOrderByIdDesc(
+        targetType: WorkspaceOperationTarget,
+        targetId: Long,
+        action: WorkspaceOperationAction
+    ): WorkspaceOperation?
+
     fun existsByIdempotencyKey(idempotencyKey: String): Boolean
 
     fun existsByTargetTypeAndTargetIdAndStatusIn(
@@ -18,11 +24,43 @@ interface WorkspaceOperationRepository : JpaRepository<WorkspaceOperation, Long>
         statuses: Collection<WorkspaceOperationStatus>
     ): Boolean
 
+    fun existsByTargetTypeAndTargetIdAndActionAndStatusIn(
+        targetType: WorkspaceOperationTarget,
+        targetId: Long,
+        action: WorkspaceOperationAction,
+        statuses: Collection<WorkspaceOperationStatus>
+    ): Boolean
+
+    fun existsByTargetTypeAndTargetIdAndActionAndStatusInAndIdGreaterThan(
+        targetType: WorkspaceOperationTarget,
+        targetId: Long,
+        action: WorkspaceOperationAction,
+        statuses: Collection<WorkspaceOperationStatus>,
+        id: Long
+    ): Boolean
+
     fun findTopByTargetTypeAndTargetIdAndStatusOrderByCreatedAtDesc(
         targetType: WorkspaceOperationTarget,
         targetId: Long,
         status: WorkspaceOperationStatus
     ): WorkspaceOperation?
+
+    @Query(
+        """
+        select count(operation) > 0 from WorkspaceOperation operation
+        where operation.targetType = :targetType
+          and operation.status in :statuses
+          and operation.targetId in (
+              select membership.id from UserCourses membership
+              where membership.course.id = :courseId
+          )
+        """
+    )
+    fun existsActiveMembershipOperationForCourse(
+        @Param("courseId") courseId: Long,
+        @Param("targetType") targetType: WorkspaceOperationTarget,
+        @Param("statuses") statuses: Collection<WorkspaceOperationStatus>
+    ): Boolean
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query(

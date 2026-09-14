@@ -4,6 +4,7 @@ import org.jbnu.jdevops.jcodeportallogin.dto.watcher.StudentSubmissionSummary
 import org.jbnu.jdevops.jcodeportallogin.dto.watcher.SubmissionDashboardDto
 import org.jbnu.jdevops.jcodeportallogin.dto.watcher.WatcherStatus
 import org.jbnu.jdevops.jcodeportallogin.entity.RoleType
+import org.jbnu.jdevops.jcodeportallogin.entity.MembershipStatus
 import org.jbnu.jdevops.jcodeportallogin.repo.AssignmentRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.CourseRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.UserCoursesRepository
@@ -76,6 +77,9 @@ class SubmissionDashboardService(
         if (user.role != RoleType.ADMIN) {
             val membership = userCoursesRepository.findByUserIdAndCourseId(user.id, courseId)
                 ?: throw ResponseStatusException(HttpStatus.FORBIDDEN, "해당 강의에 소속되어 있지 않습니다.")
+            if (membership.lifecycleStatus != MembershipStatus.READY) {
+                throw ResponseStatusException(HttpStatus.FORBIDDEN, "활성 상태의 강의 소속만 대시보드를 조회할 수 있습니다.")
+            }
             if (membership.role !in setOf(RoleType.PROFESSOR, RoleType.ASSISTANT)) {
                 throw ResponseStatusException(HttpStatus.FORBIDDEN, "대시보드 접근 권한이 없습니다.")
             }
@@ -95,6 +99,7 @@ class SubmissionDashboardService(
 
         // 해당 과목 학생 목록 조회
         val studentCourses = userCoursesRepository.findByCourseIdAndRole(courseId, RoleType.STUDENT)
+            .filter { it.lifecycleStatus == MembershipStatus.READY }
 
         val students = studentCourses.mapNotNull { membership ->
             membership.user.studentNum?.let { it to membership.user.name }

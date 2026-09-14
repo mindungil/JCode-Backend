@@ -8,4 +8,12 @@ interface StarterArtifactRepository : JpaRepository<StarterArtifact, Long> {
     fun findTopByAssignmentIdOrderByVersionDesc(assignmentId: Long): StarterArtifact?
     fun findTopByAssignmentIdAndStatusOrderByVersionDesc(assignmentId: Long, status: StarterArtifactStatus): StarterArtifact?
     fun findByAssignmentCourseIdAndStatusOrderByVersionDesc(courseId: Long, status: StarterArtifactStatus): List<StarterArtifact>
+    fun findTopByAssignmentIdAndStatusAndPublishedAtIsNotNullOrderByVersionDesc(
+        assignmentId: Long,
+        status: StarterArtifactStatus
+    ): StarterArtifact?
+    fun findByAssignmentCourseIdAndStatusAndPublishedAtIsNotNullOrderByVersionDesc(
+        courseId: Long,
+        status: StarterArtifactStatus
+    ): List<StarterArtifact>
 }

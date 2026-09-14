@@ -17,6 +17,9 @@ interface UserCoursesRepository : JpaRepository<UserCourses, Long> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select membership from UserCourses membership where membership.user.id = :userId and membership.course.id = :courseId")
     fun findByUserIdAndCourseIdForUpdate(userId: Long, courseId: Long): UserCourses?
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select membership from UserCourses membership where membership.id = :id")
+    fun findByIdForUpdate(id: Long): UserCourses?
     fun existsByUserIdAndCourseId(userId: Long, courseId: Long): Boolean
     fun findByUserEmailAndRole(email: String, role: RoleType): List<UserCourses>
     fun countUserCoursesByCourseIdAndRole(courseId: Long, role: RoleType): Int

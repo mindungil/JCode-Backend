@@ -39,6 +39,12 @@ class StarterArtifact(
     @Column(nullable = false, length = 24)
     var status: StarterArtifactStatus = StarterArtifactStatus.UPLOADING,
 
+    @Column(name = "distribution_started_at")
+    var distributionStartedAt: LocalDateTime? = null,
+
+    @Column(name = "published_at")
+    var publishedAt: LocalDateTime? = null,
+
     @Column(name = "last_error", columnDefinition = "TEXT")
     var lastError: String? = null,
 

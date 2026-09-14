@@ -23,6 +23,9 @@ class WebClientConfig {
     @Value("\${watcher.url}")
     private lateinit var watcherUrl: String
 
+    @Value("\${watcher.query-token}")
+    private lateinit var watcherQueryToken: String
+
     @Value("\${generator.bootstrap.url}")
     private lateinit var generatorBootstrapUrl: String
 
@@ -36,6 +39,7 @@ class WebClientConfig {
     fun watcherWebClient(): WebClient {
         return WebClient.builder()
             .baseUrl(watcherUrl)
+            .defaultHeader("X-Watcher-Query-Token", watcherQueryToken)
             .codecs { configurer ->
                 configurer.defaultCodecs().maxInMemorySize(maxInMemorySize.toBytes().toInt())
             }

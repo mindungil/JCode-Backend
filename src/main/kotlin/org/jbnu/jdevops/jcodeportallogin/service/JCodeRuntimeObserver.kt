@@ -2,6 +2,7 @@ package org.jbnu.jdevops.jcodeportallogin.service
 
 import org.jbnu.jdevops.jcodeportallogin.config.GENERATOR_SCOPE_ATTRIBUTE
 import org.jbnu.jdevops.jcodeportallogin.entity.*
+import org.jbnu.jdevops.jcodeportallogin.exception.PublicApiException
 import org.jbnu.jdevops.jcodeportallogin.repo.JCodeRepository
 import org.jbnu.jdevops.jcodeportallogin.repo.CourseRepository
 import org.springframework.beans.factory.annotation.Qualifier
@@ -19,7 +20,9 @@ data class JCodeRuntimeTarget(
     val courseId: Long,
     val namespace: String,
     val deploymentName: String,
-    val serviceName: String
+    val serviceName: String,
+    val desiredRevision: Long,
+    val desiredMountHash: String?
 )
 
 data class JCodeRuntimeResult(val state: JcodeObservedStatus, val reasonCode: String)
@@ -30,7 +33,8 @@ class JCodeRuntimeStateStore(
     private val courseRepository: CourseRepository,
     private val workspaceOperationStore: WorkspaceOperationStore,
     private val courseInfrastructureOperationStore: CourseInfrastructureOperationStore,
-    private val redisService: RedisService
+    private val redisService: RedisService,
+    private val workspaceAccessPolicy: WorkspaceAccessPolicy
 ) {
     @Transactional(readOnly = true)
     fun target(id: Long): JCodeRuntimeTarget {
@@ -43,7 +47,9 @@ class JCodeRuntimeStateStore(
             courseId = course.id,
             namespace = course.namespaceKey ?: Course.namespaceKey(course.infrastructureKey, course.clss),
             deploymentName = jcode.deploymentName,
-            serviceName = jcode.serviceName
+            serviceName = jcode.serviceName,
+            desiredRevision = jcode.desiredRevision,
+            desiredMountHash = jcode.desiredMountHash
         )
     }
 
@@ -58,6 +64,16 @@ class JCodeRuntimeStateStore(
         jcode.lastObservedAt = now
 
         if (result.state == JcodeObservedStatus.READY) {
+            if (
+                !jcode.snapshot &&
+                jcode.kind == JcodeKind.STANDARD &&
+                (jcode.observedRevision != jcode.desiredRevision || jcode.observedMountHash.isNullOrBlank())
+            ) {
+                redisService.deleteJcodeRoute(jcode.id)
+                workspaceOperationStore.enqueueJcodeAccessReconcile(jcode.id, jcode.desiredRevision)
+                jCodeRepository.save(jcode)
+                return false
+            }
             jCodeRepository.save(jcode)
             return jcode.lifecycleStatus == JcodeLifecycleStatus.READY
         }
@@ -67,9 +83,19 @@ class JCodeRuntimeStateStore(
         }
         redisService.deleteJcodeRoute(jcode.id)
 
+        if (result.reasonCode in setOf(
+                "POLICY_REVISION_MISMATCH",
+                "MOUNT_HASH_MISMATCH",
+                "POLICY_POD_MISMATCH"
+            )) {
+            workspaceOperationStore.enqueueJcodeAccessReconcile(jcode.id, jcode.desiredRevision)
+            jCodeRepository.save(jcode)
+            return false
+        }
+
         val assignmentEligible = jcode.assignment?.let {
             it.lifecycleStatus == AssignmentLifecycleStatus.ACTIVE &&
-                it.scheduleStatus == AssignmentScheduleStatus.OPEN
+                (jcode.kind == JcodeKind.INSPECTOR || workspaceAccessPolicy.isStudentAccessible(it, now))
         } ?: true
         val eligible = jcode.course.status == CourseStatus.ACTIVE &&
             jcode.course.workspaceRuntimeEnabled &&
@@ -81,8 +107,9 @@ class JCodeRuntimeStateStore(
         }
 
         if (result.state == JcodeObservedStatus.FAILED) {
-            jcode.lifecycleStatus = JcodeLifecycleStatus.PROVISION_FAILED
-            jcode.lastError = "JCode workload readiness failed: ${result.reasonCode}"
+            // Reconcile is also an idempotent workload repair. Keeping READY avoids a queue
+            // deadlock when an older access reconcile is already ahead of a provision action.
+            workspaceOperationStore.enqueueJcodeAccessReconcile(jcode.id, jcode.desiredRevision)
             jCodeRepository.save(jcode)
             return false
         }
@@ -119,7 +146,8 @@ class JCodeRuntimeStateStore(
         workspaceOperationStore.enqueueOnce(
             WorkspaceOperationTarget.JCODE,
             jcode.id,
-            WorkspaceOperationAction.PROVISION_JCODE
+            WorkspaceOperationAction.PROVISION_JCODE,
+            desiredRevision = jcode.desiredRevision
         )
         return false
     }
@@ -128,6 +156,7 @@ class JCodeRuntimeStateStore(
 @Service
 class JCodeRuntimeObserver(
     private val stateStore: JCodeRuntimeStateStore,
+    private val generatorContractVerifier: GeneratorContractVerifier,
     @Qualifier("generatorWorkspaceWebClient") private val generator: WebClient,
     @Value("\${jcode.runtime.observe-on-launch:true}") private val observeOnLaunch: Boolean,
     @Value("\${jcode.runtime.request-timeout-seconds:5}") private val timeoutSeconds: Long
@@ -136,6 +165,7 @@ class JCodeRuntimeObserver(
         if (!observeOnLaunch) return
         val target = stateStore.target(jcodeId)
         val response = try {
+            generatorContractVerifier.requireCompatible()
             generator.get()
                 .uri { builder ->
                     builder.path("/api/jcode/status")
@@ -143,6 +173,10 @@ class JCodeRuntimeObserver(
                         .queryParam("namespace", target.namespace)
                         .queryParam("deployment_name", target.deploymentName)
                         .queryParam("service_name", target.serviceName)
+                        .queryParam("policy_revision", target.desiredRevision)
+                        .apply {
+                            target.desiredMountHash?.let { queryParam("mount_hash", it) }
+                        }
                         .build()
                 }
                 .attribute(GENERATOR_SCOPE_ATTRIBUTE, "jcode:read")
@@ -152,8 +186,9 @@ class JCodeRuntimeObserver(
                 .block()
                 ?: throw IllegalStateException("empty Generator response")
         } catch (_: Exception) {
-            throw ResponseStatusException(
+            throw PublicApiException(
                 HttpStatus.SERVICE_UNAVAILABLE,
+                "JCODE_RUNTIME_UNAVAILABLE",
                 "JCode 실행 상태를 확인할 수 없습니다. 잠시 후 다시 시도해주세요."
             )
         }
@@ -166,8 +201,13 @@ class JCodeRuntimeObserver(
             reasonCode = response["reasonCode"]?.toString() ?: "UNKNOWN"
         )
         if (!stateStore.recordAndRepair(jcodeId, result)) {
-            throw ResponseStatusException(
+            throw PublicApiException(
                 HttpStatus.CONFLICT,
+                when (state) {
+                    JcodeObservedStatus.FAILED -> "JCODE_RECOVERY_REQUIRED"
+                    JcodeObservedStatus.DRIFTED -> "JCODE_POLICY_APPLYING"
+                    else -> "JCODE_PREPARING"
+                },
                 when (state) {
                     JcodeObservedStatus.FAILED -> "JCode 실행 환경 복구가 필요합니다. 관리자에게 문의해주세요."
                     JcodeObservedStatus.DRIFTED -> "JCode 실행 환경 설정을 확인하고 있습니다. 잠시 후 다시 시도해주세요."

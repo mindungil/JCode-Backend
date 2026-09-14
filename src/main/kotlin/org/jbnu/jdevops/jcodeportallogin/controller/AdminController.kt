@@ -41,7 +41,7 @@ class AdminController(private val userService: UserService) {
 
     // 특정 유저 권한 변경 (ADMIN, PROFESSOR 전용)
     @Operation(summary = "특정 유저 권한 변경", description = "관리자(or 교수)가 특정 사용자의 권한을 변경합니다.")
-    @PreAuthorize("hasAnyRole('ADMIN', 'PROFESSOR')")
+    @PreAuthorize("isAuthenticated()")
     @PutMapping("/{userId}/role")
     fun updateUserRole(
         @PathVariable userId: Long,
@@ -66,7 +66,7 @@ class AdminController(private val userService: UserService) {
 
     // 특정 유저 강의 탈퇴 (ADMIN, PROFESSOR 전용)
     @Operation(summary = "특정 유저 강의 탈퇴", description = "관리자(or 교수)가 특정 사용자를 특정 강의에서 탈퇴시킵니다.")
-    @PreAuthorize("hasAnyRole('ADMIN', 'PROFESSOR')")
+    @PreAuthorize("isAuthenticated()")
     @DeleteMapping("/{userId}/courses/{courseId}")
     fun chaseOutCourse(@PathVariable userId: Long, @PathVariable courseId: Long, request: HttpServletRequest, authentication: Authentication): ResponseEntity<Map<String, Any>> {
         val email = authentication.principal as? String

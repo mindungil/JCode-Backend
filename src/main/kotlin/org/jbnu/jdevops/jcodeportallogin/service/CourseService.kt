@@ -33,8 +33,12 @@ import org.springframework.web.server.ResponseStatusException
 import org.springframework.http.HttpStatus
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.transaction.annotation.Transactional
+import org.springframework.transaction.annotation.Isolation
 import java.time.LocalDateTime
 import java.util.UUID
+import java.security.MessageDigest
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import org.jbnu.jdevops.jcodeportallogin.exception.PublicApiException
 
 @Service
 class CourseService(
@@ -73,7 +77,7 @@ class CourseService(
                 WorkspaceEgressPolicy.PACKAGE_PROXY, WorkspaceScope.COURSE
             )
             CourseEnvironmentProfile.LAB -> ResolvedWorkspaceProfile(
-                type, true, true, null, WorkspaceResourceProfile.STANDARD,
+                type, true, false, null, WorkspaceResourceProfile.STANDARD,
                 WorkspaceEgressPolicy.PACKAGE_PROXY, WorkspaceScope.COURSE
             )
             CourseEnvironmentProfile.CUSTOM -> ResolvedWorkspaceProfile(
@@ -134,7 +138,7 @@ class CourseService(
             return user
         }
         val membership = userCoursesRepository.findByUserIdAndCourseId(user.id, courseId)
-        if (membership?.role != RoleType.PROFESSOR) {
+        if (membership?.lifecycleStatus != MembershipStatus.READY || membership.role != RoleType.PROFESSOR) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "해당 강의의 담당 교수 권한이 없습니다.")
         }
         return user
@@ -171,8 +175,12 @@ class CourseService(
         val user = userRepository.findByEmail(email)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Current user not found")
         if (user.role == RoleType.ADMIN) return RoleType.ADMIN
-        return userCoursesRepository.findByUserIdAndCourseId(user.id, courseId)?.role
+        val membership = userCoursesRepository.findByUserIdAndCourseId(user.id, courseId)
             ?: throw ResponseStatusException(HttpStatus.FORBIDDEN, "해당 강의에 소속되어 있지 않습니다.")
+        if (membership.lifecycleStatus != MembershipStatus.READY) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "활성 상태의 강의 소속만 접근할 수 있습니다.")
+        }
+        return membership.role
     }
     // 강의별 유저 조회
     @Transactional(readOnly = true)
@@ -189,12 +197,16 @@ class CourseService(
 
         if (currentUser.role != RoleType.ADMIN) {
             val membership = userCoursesRepository.findByUserIdAndCourseId(currentUser.id, courseId)
-            if (membership?.role !in setOf(RoleType.PROFESSOR, RoleType.ASSISTANT)) {
+            if (membership?.lifecycleStatus != MembershipStatus.READY ||
+                membership.role !in setOf(RoleType.PROFESSOR, RoleType.ASSISTANT)
+            ) {
                 throw ResponseStatusException(HttpStatus.FORBIDDEN, "해당 강의의 사용자 조회 권한이 없습니다.")
             }
         }
 
-       return userCourses.map {
+       return userCourses
+           .filter { it.lifecycleStatus != MembershipStatus.ARCHIVED }
+           .map {
            val user = it.user
            val role = it.role
            UserInfoDto(
@@ -228,6 +240,7 @@ class CourseService(
                 dirName = it.workspaceKey,
                 workspaceKey = it.workspaceKey,
                 hasStarterCode = it.hasStarterCode,
+                starterDistributionPending = it.starterDistributionPending,
                 lifecycleStatus = it.lifecycleStatus,
                 scheduleStatus = it.scheduleStatus,
                 lastError = it.lastError?.let {
@@ -266,15 +279,38 @@ class CourseService(
     }
 
     // 강의 추가 (DB 저장 + Generator에 NS 초기화 요청)
-    @Transactional
-    fun createCourse(courseDto: CourseDto, creatorEmail: String): CourseDto {
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    fun createCourse(courseDto: CourseDto, creatorEmail: String, idempotencyKey: String? = null): CourseDto {
+        val requestId = idempotencyKey?.trim()?.takeIf {
+            Regex("^[A-Za-z0-9._-]{16,128}$").matches(it)
+        } ?: throw PublicApiException(HttpStatus.BAD_REQUEST, "CREATION_REQUEST_ID_REQUIRED", "수업 개설 요청 정보가 없습니다. 페이지를 새로고침한 뒤 다시 시도해주세요.")
         val profile = resolveWorkspaceProfile(courseDto)
-        val creator = userRepository.findByEmail(creatorEmail)
+        // Serialize one creator's requests before reading the committed receipt.
+        val creator = userRepository.findByEmailForUpdate(creatorEmail)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Course creator not found")
         if (creator.role !in setOf(RoleType.ADMIN, RoleType.PROFESSOR)) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "강의 개설 권한이 없습니다.")
         }
         val professorName = resolveProfessorName(courseDto, creator)
+        fun digest(value: String) = MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+        val requestKey = digest("${creator.id}:$requestId")
+        val requestHash = digest(jacksonObjectMapper().writeValueAsString(listOf(
+            courseDto.name, professorName, courseDto.year, courseDto.term, courseDto.clss,
+            profile.type.name, profile.useVnc, profile.useJupyter, profile.baseImage,
+            profile.resourceProfile.name, profile.egressPolicy.name, profile.workspaceScope.name,
+            courseDto.hwCount, courseDto.pracEnabled, courseDto.pracCount
+        )))
+        courseRepository.findByCreationRequestKeyForUpdate(requestKey)?.let { existing ->
+            if (existing.status !in setOf(CourseStatus.PROVISIONING, CourseStatus.ACTIVE, CourseStatus.ERROR)) {
+                throw PublicApiException(HttpStatus.CONFLICT, "CREATION_REQUEST_FINISHED", "이미 종료 처리된 수업의 개설 요청입니다. 새 수업을 개설하려면 다시 요청해주세요.")
+            }
+            if (existing.creationRequestHash != requestHash) {
+                throw PublicApiException(HttpStatus.CONFLICT, "CREATION_REQUEST_CHANGED", "이미 처리된 개설 요청과 입력 내용이 다릅니다. 새 개설 요청으로 다시 시도해주세요.")
+            }
+            // Enrollment codes are stored as hashes; replay never rotates them.
+            return existing.toDto()
+        }
         val identity = allocateInfrastructureIdentity(courseDto.clss)
         // 랜덤 key를 생성하여 할당
         val rawKey = courseKeyUtil.generateCourseEnrollmentCode(identity.key, courseDto.clss)
@@ -282,6 +318,8 @@ class CourseService(
         val encryptedKey = passwordEncoder.encode(rawKey)
 
         val course = courseRepository.save(Course(
+            creationRequestKey = requestKey,
+            creationRequestHash = requestHash,
             name = courseDto.name,
             infrastructureKey = identity.key,
             professor = professorName,
@@ -304,9 +342,16 @@ class CourseService(
             status = CourseStatus.PROVISIONING
         ))
 
-        userCoursesRepository.save(
-            UserCourses(course = course, user = creator, role = creator.role, lifecycleStatus = MembershipStatus.READY)
-        )
+        if (creator.role == RoleType.PROFESSOR) {
+            userCoursesRepository.save(
+                UserCourses(
+                    course = course,
+                    user = creator,
+                    role = RoleType.PROFESSOR,
+                    lifecycleStatus = MembershipStatus.READY
+                )
+            )
+        }
 
         infrastructureOperationStore.enqueue(course.id, CourseInfrastructureAction.PROVISION_NAMESPACE)
 
@@ -319,6 +364,12 @@ class CourseService(
         val actor = validateCourseManagementAuthority(courseId, email)
         val course = courseRepository.findById(courseId)
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "Course not found") }
+        if (course.status !in setOf(CourseStatus.PROVISIONING, CourseStatus.ACTIVE)) {
+            throw ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "생성 중이거나 활성 상태인 강의만 수정할 수 있습니다."
+            )
+        }
 
         val requestedProfile = resolveWorkspaceProfile(courseDto)
         if (course.clss != courseDto.clss ||
@@ -382,8 +433,21 @@ class CourseService(
         assignmentRepository.findByCourseId(course.id).forEach { assignment ->
             when (assignment.lifecycleStatus) {
                 AssignmentLifecycleStatus.ACTIVE -> {
+                    if (
+                        assignment.scheduleStatus != AssignmentScheduleStatus.CLOSED ||
+                        assignment.finalizationGeneration == 0
+                    ) {
+                        assignment.finalizationGeneration += 1
+                    }
                     assignment.scheduleStatus = AssignmentScheduleStatus.CLOSED
-                    assignment.lastError = null
+                    if (assignment.starterDistributionPending && !assignment.hasStarterCode) {
+                        // The initial upload never reached storage, so no workspace mutation
+                        // needs to be completed before the course can terminate.
+                        assignment.starterDistributionPending = false
+                        assignment.lastError = null
+                    } else if (!assignment.starterDistributionPending) {
+                        assignment.lastError = null
+                    }
                     assignment.updatedAt = LocalDateTime.now()
                     assignmentRepository.save(assignment)
                     if (assignment.finalizedAt == null) {
@@ -517,6 +581,7 @@ class CourseService(
                     dirName = assignment.workspaceKey,
                     workspaceKey = assignment.workspaceKey,
                     hasStarterCode = assignment.hasStarterCode,
+                    starterDistributionPending = assignment.starterDistributionPending,
                     lifecycleStatus = assignment.lifecycleStatus,
                     scheduleStatus = assignment.scheduleStatus,
                     lastError = assignment.lastError?.let {

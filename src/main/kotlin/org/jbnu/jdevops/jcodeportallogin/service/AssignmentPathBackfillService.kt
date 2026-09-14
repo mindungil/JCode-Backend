@@ -8,6 +8,7 @@ import org.jbnu.jdevops.jcodeportallogin.entity.Course
 import org.jbnu.jdevops.jcodeportallogin.entity.CourseStatus
 import org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceOperationAction
 import org.jbnu.jdevops.jcodeportallogin.repo.AssignmentRepository
+import org.jbnu.jdevops.jcodeportallogin.repo.CourseRepository
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.beans.factory.annotation.Value
@@ -40,6 +41,7 @@ enum class MissingNamespacePolicy {
 data class AssignmentPathBackfillResult(
     val registered: Int,
     val archived: Int,
+    val policyCoursesInitialized: Int,
     val missingNamespaces: List<String>
 )
 
@@ -73,8 +75,10 @@ class GeneratorCourseNamespaceLookup(
 @Service
 class AssignmentPathBackfillService(
     private val assignmentRepository: AssignmentRepository,
+    private val courseRepository: CourseRepository,
     private val operationStore: WorkspaceOperationStore,
-    private val namespaceLookup: CourseNamespaceLookup
+    private val namespaceLookup: CourseNamespaceLookup,
+    private val workspacePolicyRevisionService: WorkspacePolicyRevisionService
 ) {
     fun execute(policy: MissingNamespacePolicy): AssignmentPathBackfillResult {
         val assignments = assignmentRepository.findByPathBackfillStatus(AssignmentPathBackfillStatus.PENDING)
@@ -92,6 +96,10 @@ class AssignmentPathBackfillService(
                     "검토 후 --workspace.assignment-path-backfill.missing-namespace=archive를 명시하세요."
             )
         }
+
+        val policyCoursesInitialized = courseRepository.findByWorkspacePolicyInitializedFalse()
+            .sortedBy { it.id }
+            .count { workspacePolicyRevisionService.initializeExistingCourse(it.id) }
 
         var registered = 0
         var archived = 0
@@ -116,7 +124,7 @@ class AssignmentPathBackfillService(
             }
             assignmentRepository.save(assignment)
         }
-        return AssignmentPathBackfillResult(registered, archived, missing)
+        return AssignmentPathBackfillResult(registered, archived, policyCoursesInitialized, missing)
     }
 }
 
@@ -137,9 +145,10 @@ class AssignmentPathBackfillRunner(
         val exitCode = try {
             val result = service.execute(MissingNamespacePolicy.parse(policy))
             logger.info(
-                "Assignment path backfill completed: registered={}, archived={}, missing={}",
+                "Assignment path backfill completed: registered={}, archived={}, policyCoursesInitialized={}, missing={}",
                 result.registered,
                 result.archived,
+                result.policyCoursesInitialized,
                 result.missingNamespaces
             )
             0

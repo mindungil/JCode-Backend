@@ -8,6 +8,7 @@ import org.jbnu.jdevops.jcodeportallogin.entity.Course
 import org.jbnu.jdevops.jcodeportallogin.entity.CourseStatus
 import org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceOperationAction
 import org.jbnu.jdevops.jcodeportallogin.repo.AssignmentRepository
+import org.jbnu.jdevops.jcodeportallogin.repo.CourseRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Test
@@ -22,9 +23,17 @@ import java.time.LocalDateTime
 
 class AssignmentPathBackfillServiceTest {
     private val assignmentRepository = mock(AssignmentRepository::class.java)
+    private val courseRepository = mock(CourseRepository::class.java)
     private val operationStore = mock(WorkspaceOperationStore::class.java)
     private val namespaceLookup = mock(CourseNamespaceLookup::class.java)
-    private val service = AssignmentPathBackfillService(assignmentRepository, operationStore, namespaceLookup)
+    private val workspacePolicyRevisionService = mock(WorkspacePolicyRevisionService::class.java)
+    private val service = AssignmentPathBackfillService(
+        assignmentRepository,
+        courseRepository,
+        operationStore,
+        namespaceLookup,
+        workspacePolicyRevisionService
+    )
 
     @Test
     fun `active course with namespace registers migration once per assignment`() {
@@ -34,17 +43,21 @@ class AssignmentPathBackfillServiceTest {
         `when`(assignmentRepository.findByPathBackfillStatus(AssignmentPathBackfillStatus.PENDING))
             .thenReturn(listOf(open, closed))
         `when`(namespaceLookup.exists(course)).thenReturn(true)
+        `when`(courseRepository.findByWorkspacePolicyInitializedFalse()).thenReturn(listOf(course))
+        `when`(workspacePolicyRevisionService.initializeExistingCourse(course.id)).thenReturn(true)
 
         val result = service.execute(MissingNamespacePolicy.FAIL)
 
         assertEquals(2, result.registered)
         assertEquals(0, result.archived)
+        assertEquals(1, result.policyCoursesInitialized)
         assertEquals(AssignmentPathBackfillStatus.REGISTERED, open.pathBackfillStatus)
         assertEquals(AssignmentPathBackfillStatus.REGISTERED, closed.pathBackfillStatus)
         verify(namespaceLookup, times(1)).exists(course)
         verify(operationStore).enqueueBackfillOnce(11, WorkspaceOperationAction.MIGRATE_ASSIGNMENT_PATH)
         verify(operationStore).enqueueBackfillOnce(12, WorkspaceOperationAction.MIGRATE_ASSIGNMENT_PATH)
         verify(operationStore).enqueueBackfillOnce(12, WorkspaceOperationAction.ARCHIVE_FINAL_SUBMISSION)
+        verify(workspacePolicyRevisionService).initializeExistingCourse(course.id)
     }
 
     @Test
@@ -62,6 +75,7 @@ class AssignmentPathBackfillServiceTest {
         assertEquals(AssignmentPathBackfillStatus.PENDING, assignment.pathBackfillStatus)
         verify(assignmentRepository, never()).save(assignment)
         verifyNoInteractions(operationStore)
+        verifyNoInteractions(workspacePolicyRevisionService)
     }
 
     @Test

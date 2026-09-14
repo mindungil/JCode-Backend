@@ -18,7 +18,15 @@ class JCodeRuntimeStateStoreTest {
     private val courseOperations = mock(CourseInfrastructureOperationStore::class.java)
     private val courseRepository = mock(CourseRepository::class.java)
     private val redisService = mock(RedisService::class.java)
-    private val store = JCodeRuntimeStateStore(repository, courseRepository, operations, courseOperations, redisService)
+    private val workspaceAccessPolicy = mock(WorkspaceAccessPolicy::class.java)
+    private val store = JCodeRuntimeStateStore(
+        repository,
+        courseRepository,
+        operations,
+        courseOperations,
+        redisService,
+        workspaceAccessPolicy
+    )
 
     @Test
     fun `missing deployment is repaired once only for runtime-enabled course`() {
@@ -37,7 +45,8 @@ class JCodeRuntimeStateStoreTest {
         verify(operations).enqueueOnce(
             WorkspaceOperationTarget.JCODE,
             jcode.id,
-            WorkspaceOperationAction.PROVISION_JCODE
+            WorkspaceOperationAction.PROVISION_JCODE,
+            desiredRevision = jcode.desiredRevision
         )
     }
 
@@ -53,6 +62,50 @@ class JCodeRuntimeStateStoreTest {
 
         assertFalse(ready)
         assertEquals(JcodeLifecycleStatus.READY, jcode.lifecycleStatus)
+        verify(operations, never()).enqueueOnce(
+            WorkspaceOperationTarget.JCODE,
+            jcode.id,
+            WorkspaceOperationAction.PROVISION_JCODE
+        )
+    }
+
+    @Test
+    fun `mount policy drift queues access reconcile without reprovisioning the JCode`() {
+        val jcode = jcode(runtimeEnabled = true).also {
+            it.desiredRevision = 9
+            it.observedRevision = 8
+        }
+        `when`(repository.findByIdForUpdate(jcode.id)).thenReturn(Optional.of(jcode))
+
+        val ready = store.recordAndRepair(
+            jcode.id,
+            JCodeRuntimeResult(JcodeObservedStatus.DRIFTED, "POLICY_REVISION_MISMATCH")
+        )
+
+        assertFalse(ready)
+        assertEquals(JcodeLifecycleStatus.READY, jcode.lifecycleStatus)
+        verify(operations).enqueueJcodeAccessReconcile(jcode.id, 9)
+        verify(operations, never()).enqueueOnce(
+            WorkspaceOperationTarget.JCODE,
+            jcode.id,
+            WorkspaceOperationAction.PROVISION_JCODE
+        )
+    }
+
+    @Test
+    fun `runtime readiness failure uses access reconcile without changing ready lifecycle`() {
+        val jcode = jcode(runtimeEnabled = true)
+        `when`(repository.findByIdForUpdate(jcode.id)).thenReturn(Optional.of(jcode))
+
+        val ready = store.recordAndRepair(
+            jcode.id,
+            JCodeRuntimeResult(JcodeObservedStatus.FAILED, "DEPLOYMENT_PROGRESS_DEADLINE")
+        )
+
+        assertFalse(ready)
+        assertEquals(JcodeLifecycleStatus.READY, jcode.lifecycleStatus)
+        assertEquals(JcodeObservedStatus.FAILED, jcode.observedStatus)
+        verify(operations).enqueueJcodeAccessReconcile(jcode.id, jcode.desiredRevision)
         verify(operations, never()).enqueueOnce(
             WorkspaceOperationTarget.JCODE,
             jcode.id,

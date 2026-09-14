@@ -1,6 +1,7 @@
 package org.jbnu.jdevops.jcodeportallogin.util
 
 import org.jbnu.jdevops.jcodeportallogin.entity.RoleType
+import org.jbnu.jdevops.jcodeportallogin.entity.MembershipStatus
 import org.jbnu.jdevops.jcodeportallogin.repo.UserCoursesRepository
 import org.springframework.web.server.ResponseStatusException
 import org.springframework.http.HttpStatus
@@ -17,6 +18,10 @@ object AuthorizationUtil {
 
         val membership = userCoursesRepository.findByUserIdAndCourseId(currentUserId, courseId)
             ?: throw ResponseStatusException(HttpStatus.FORBIDDEN, "해당 강의에 소속되어 있지 않습니다.")
+
+        if (membership.lifecycleStatus != MembershipStatus.READY) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "활성 상태의 강의 소속만 접근할 수 있습니다.")
+        }
 
         if (currentUserId == targetUserId) return
         if (membership.role !in setOf(RoleType.PROFESSOR, RoleType.ASSISTANT)) {

@@ -6,6 +6,7 @@ import org.jbnu.jdevops.jcodeportallogin.service.UserService
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import jakarta.servlet.http.HttpServletRequest
+import jakarta.validation.Valid
 import org.jbnu.jdevops.jcodeportallogin.dto.course.CourseJoinDto
 import org.jbnu.jdevops.jcodeportallogin.dto.jcode.JCodeDto
 import org.jbnu.jdevops.jcodeportallogin.dto.user.UserInfoDto
@@ -48,7 +49,7 @@ class UserController(
     )
     @PutMapping("/me")
     fun updateUserInfo(
-        @RequestBody updateDto: UserProfileUpdateDto,
+        @Valid @RequestBody updateDto: UserProfileUpdateDto,
         authentication: Authentication
     ): ResponseEntity<Map<String, String>> {
         val email = authentication.principal as? String

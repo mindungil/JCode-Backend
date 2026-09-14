@@ -12,6 +12,12 @@ data class Course(
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     val id: Long = 0,
 
+    @Column(name = "creation_request_key", length = 64, unique = true, updatable = false)
+    val creationRequestKey: String? = null,
+
+    @Column(name = "creation_request_hash", length = 64, updatable = false)
+    val creationRequestHash: String? = null,
+
     @Column(nullable = false)
     @field:NotBlank(message = "{course.name.required}")
     @field:Size(max = 100, message = "{course.name.size}")
@@ -53,7 +59,7 @@ data class Course(
     val useVnc: Boolean = vnc,
 
     @Column(nullable = false)
-    val useJupyter: Boolean = vnc,
+    val useJupyter: Boolean = false,
 
     @Column(length = 512)
     val baseImage: String? = null,
@@ -86,6 +92,13 @@ data class Course(
     @Column(name = "workspace_runtime_enabled", nullable = false)
     var workspaceRuntimeEnabled: Boolean = false,
 
+    @Column(name = "workspace_policy_revision", nullable = false)
+    var workspacePolicyRevision: Long = 0,
+
+    // Existing rows are initialized once by the deployment backfill. New courses already use v3 policy.
+    @Column(name = "workspace_policy_initialized", nullable = false)
+    var workspacePolicyInitialized: Boolean = true,
+
     @Column
     var endedAt: LocalDateTime? = null,
 
@@ -96,6 +109,10 @@ data class Course(
 
     @Column(nullable = false, updatable = false)
     val createdAt: LocalDateTime = LocalDateTime.now(),
+
+    @Version
+    @Column(nullable = false)
+    var version: Long = 0,
 
     @OneToMany(mappedBy = "course", cascade = [CascadeType.ALL], orphanRemoval = true, fetch = FetchType.LAZY)
     val userCourses: List<UserCourses> = mutableListOf(),

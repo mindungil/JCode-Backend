@@ -60,7 +60,7 @@ class CourseController(
 
     // 강의 key 재발급 API (ADMIN, PROFESSOR 전용)
     @Operation(summary = "강의 key 재발급", description = "특정 강의의 key를 재발급합니다. (ADMIN, PROFESSOR 전용)")
-    @PreAuthorize("hasAnyRole('ADMIN', 'PROFESSOR')")
+    @PreAuthorize("isAuthenticated()")
     @GetMapping("/{courseId}/key")
     fun reissueCourseKey(@PathVariable courseId: Long, authentication: Authentication): ResponseEntity<String> {
         val email = authentication.principal as? String
@@ -73,15 +73,19 @@ class CourseController(
     @Operation(summary = "강의 추가", description = "새로운 강의를 생성합니다. (ADMIN, PROFESSOR 전용)")
     @PreAuthorize("hasAnyRole('ADMIN', 'PROFESSOR')")
     @PostMapping
-    fun createCourse(@Valid @RequestBody courseDto: CourseDto, authentication: Authentication): ResponseEntity<CourseDto> {
+    fun createCourse(
+        @Valid @RequestBody courseDto: CourseDto,
+        authentication: Authentication,
+        @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?
+    ): ResponseEntity<CourseDto> {
         val email = authentication.principal as? String
             ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Missing email in authentication")
-        return ResponseEntity.status(HttpStatus.ACCEPTED).body(courseService.createCourse(courseDto, email))
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(courseService.createCourse(courseDto, email, idempotencyKey))
     }
 
     // 강의 수정 (ADMIN, PROFESSOR 전용)
     @Operation(summary = "강의 수정", description = "특정 강의의 정보를 수정합니다. (ADMIN, PROFESSOR 전용)")
-    @PreAuthorize("hasAnyRole('ADMIN', 'PROFESSOR')")
+    @PreAuthorize("isAuthenticated()")
     @PutMapping("/{courseId}")
     fun updateCourse(@PathVariable courseId: Long, @Valid @RequestBody courseDto: CourseDto, authentication: Authentication): ResponseEntity<CourseDto> {
         val email = authentication.principal as? String

@@ -4,7 +4,7 @@ import jakarta.persistence.*
 import jakarta.validation.constraints.NotBlank
 import java.time.LocalDateTime
 
-enum class JcodeKind { STANDARD, SNAPSHOT }
+enum class JcodeKind { STANDARD, SNAPSHOT, INSPECTOR }
 enum class JcodeLifecycleStatus { PROVISIONING, PROVISION_FAILED, READY, DELETE_PENDING, DELETE_FAILED, ARCHIVED }
 enum class JcodeObservedStatus { UNKNOWN, READY, NOT_READY, MISSING, FAILED, DRIFTED }
 
@@ -70,8 +70,30 @@ data class Jcode(
     @Column(name = "last_observed_at")
     var lastObservedAt: LocalDateTime? = null,
 
+    @Column(name = "desired_revision", nullable = false)
+    var desiredRevision: Long = 0,
+
+    @Column(name = "observed_revision", nullable = false)
+    var observedRevision: Long = 0,
+
+    @Column(name = "desired_mount_hash", length = 64)
+    var desiredMountHash: String? = null,
+
+    @Column(name = "observed_mount_hash", length = 64)
+    var observedMountHash: String? = null,
+
+    @Column(name = "last_routed_at")
+    var lastRoutedAt: LocalDateTime? = null,
+
+    @Column(name = "expires_at")
+    var expiresAt: LocalDateTime? = null,
+
     @Column(name = "archived_at")
     var archivedAt: LocalDateTime? = null,
+
+    @Version
+    @Column(nullable = false)
+    var version: Long = 0,
 
     @Column(nullable = false, updatable = false)
     val createdAt: LocalDateTime = LocalDateTime.now()

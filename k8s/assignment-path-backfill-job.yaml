@@ -31,6 +31,11 @@ spec:
         - --workspace.lifecycle.initial-delay-ms=86400000
         - --assignment.schedule.refresh-ms=86400000
         env:
+        - name: WATCHER_QUERY_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: watcher-query-auth
+              key: token
         - name: SPRING_PROFILES_ACTIVE
           value: prod
         - name: TZ

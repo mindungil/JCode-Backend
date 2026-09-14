@@ -13,9 +13,12 @@ import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.reactive.function.client.WebClientResponseException
 import java.time.Duration
 
+private class CourseTerminationPendingException : RuntimeException()
+
 @Component
 class CourseInfrastructureReconciler(
     private val operationStore: CourseInfrastructureOperationStore,
+    private val workspaceOperationStore: WorkspaceOperationStore,
     @Qualifier("generatorBootstrapWebClient") private val bootstrapClient: WebClient,
     @Qualifier("generatorWorkspaceWebClient") private val workspaceClient: WebClient,
     @Value("\${course.lifecycle.batch-size:10}") private val batchSize: Int,
@@ -32,12 +35,14 @@ class CourseInfrastructureReconciler(
             val operation = operationStore.claimNext() ?: return
             val course = operationStore.loadCourse(operation)
             if (course == null) {
-                operationStore.markSucceeded(operation.id)
+                operationStore.markSucceeded(operation)
                 return@repeat
             }
             try {
                 execute(operation, course)
-                operationStore.markSucceeded(operation.id)
+                operationStore.markSucceeded(operation)
+            } catch (_: CourseTerminationPendingException) {
+                operationStore.defer(operation)
             } catch (ex: Exception) {
                 logger.error(
                     "Course infrastructure reconcile failed: operation={}, course={}, attempt={}",
@@ -46,7 +51,7 @@ class CourseInfrastructureReconciler(
                     operation.attempts,
                     ex
                 )
-                operationStore.markFailed(operation.id, ex)
+                operationStore.markFailed(operation, ex)
             }
         }
     }
@@ -98,12 +103,17 @@ class CourseInfrastructureReconciler(
                 .timeout(Duration.ofSeconds(requestTimeoutSeconds))
                 .block()
 
-            CourseInfrastructureAction.DELETE_WORKLOADS -> delete(
-                workspaceClient,
-                "/api/namespace/$namespace/resources?course_id=${course.id}",
-                "namespace:resources:delete",
-                operation.idempotencyKey
-            )
+            CourseInfrastructureAction.DELETE_WORKLOADS -> {
+                if (!workspaceOperationStore.courseTerminationSettled(course.id)) {
+                    throw CourseTerminationPendingException()
+                }
+                delete(
+                    workspaceClient,
+                    "/api/namespace/$namespace/resources?course_id=${course.id}",
+                    "namespace:resources:delete",
+                    operation.idempotencyKey
+                )
+            }
 
             CourseInfrastructureAction.DELETE_NAMESPACE -> delete(
                 bootstrapClient,

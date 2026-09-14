@@ -5,6 +5,7 @@ import org.jbnu.jdevops.jcodeportallogin.dto.watcher.SnapshotAvgDto
 import org.jbnu.jdevops.jcodeportallogin.dto.watcher.WatcherBuildLogDto
 import org.jbnu.jdevops.jcodeportallogin.dto.watcher.WatcherRunLogDto
 import org.jbnu.jdevops.jcodeportallogin.entity.RoleType
+import org.jbnu.jdevops.jcodeportallogin.entity.MembershipStatus
 import org.jbnu.jdevops.jcodeportallogin.repo.*
 import org.jbnu.jdevops.jcodeportallogin.util.AuthorizationUtil
 import org.springframework.beans.factory.annotation.Qualifier
@@ -23,6 +24,14 @@ class WatcherStudentService(
     private val userRepository: UserRepository,
     private val userCoursesRepository: UserCoursesRepository
 ) {
+    private fun requireReadyTargetMembership(userId: Long, courseId: Long) {
+        val membership = userCoursesRepository.findByUserIdAndCourseId(userId, courseId)
+            ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "UserCourse not found")
+        if (membership.lifecycleStatus != MembershipStatus.READY) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "활성 상태의 강의 소속만 Watcher를 조회할 수 있습니다.")
+        }
+    }
+
     fun getSnapshotAverage(email: String, fileName: String, courseId: Long, assignmentId: Long, userId: Long): SnapshotAvgDto? {
         val currentUser = userRepository.findByEmail(email)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Current User not found")
@@ -42,9 +51,7 @@ class WatcherStudentService(
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "The assignment does not belong to the specified course")
         }
 
-        if (!userCoursesRepository.existsByUserIdAndCourseId(targetUser.id, course.id)) {
-            throw ResponseStatusException(HttpStatus.NOT_FOUND, "UserCourse not found")
-        }
+        requireReadyTargetMembership(targetUser.id, course.id)
 
         val classDiv = "${course.infrastructureKey.lowercase()}-${course.clss}"
 
@@ -83,9 +90,7 @@ class WatcherStudentService(
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "The assignment does not belong to the specified course")
         }
 
-        if (!userCoursesRepository.existsByUserIdAndCourseId(targetUser.id, course.id)) {
-            throw ResponseStatusException(HttpStatus.NOT_FOUND, "UserCourse not found")
-        }
+        requireReadyTargetMembership(targetUser.id, course.id)
 
         val classDiv = "${course.infrastructureKey.lowercase()}-${course.clss}"
 
@@ -124,9 +129,7 @@ class WatcherStudentService(
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "The assignment does not belong to the specified course")
         }
 
-        if (!userCoursesRepository.existsByUserIdAndCourseId(targetUser.id, course.id)) {
-            throw ResponseStatusException(HttpStatus.NOT_FOUND, "UserCourse not found")
-        }
+        requireReadyTargetMembership(targetUser.id, course.id)
 
         val classDiv = "${course.infrastructureKey.lowercase()}-${course.clss}"
 
@@ -165,9 +168,7 @@ class WatcherStudentService(
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "The assignment does not belong to the specified course")
         }
 
-        if (!userCoursesRepository.existsByUserIdAndCourseId(targetUser.id, course.id)) {
-            throw ResponseStatusException(HttpStatus.NOT_FOUND, "UserCourse not found")
-        }
+        requireReadyTargetMembership(targetUser.id, course.id)
 
         val classDiv = "${course.infrastructureKey.lowercase()}-${course.clss}"
 
@@ -206,9 +207,7 @@ class WatcherStudentService(
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "The assignment does not belong to the specified course")
         }
 
-        if (!userCoursesRepository.existsByUserIdAndCourseId(targetUser.id, course.id)) {
-            throw ResponseStatusException(HttpStatus.NOT_FOUND, "UserCourse not found")
-        }
+        requireReadyTargetMembership(targetUser.id, course.id)
 
         val classDiv = "${course.infrastructureKey.lowercase()}-${course.clss}"
 

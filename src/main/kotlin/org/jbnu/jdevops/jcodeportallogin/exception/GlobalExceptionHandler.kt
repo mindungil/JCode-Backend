@@ -3,10 +3,12 @@ package org.jbnu.jdevops.jcodeportallogin.exception
 import jakarta.servlet.http.HttpServletRequest
 import org.slf4j.LoggerFactory
 import org.springframework.dao.DataIntegrityViolationException
+import org.springframework.dao.OptimisticLockingFailureException
 import org.springframework.http.HttpStatus
 import org.springframework.http.HttpStatusCode
 import org.springframework.http.ResponseEntity
 import org.springframework.http.converter.HttpMessageNotReadableException
+import org.springframework.security.access.AccessDeniedException
 import org.springframework.web.bind.MethodArgumentNotValidException
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RestControllerAdvice
@@ -26,6 +28,41 @@ data class ApiErrorResponse(
 @RestControllerAdvice
 class GlobalExceptionHandler {
     private val logger = LoggerFactory.getLogger(javaClass)
+
+    @ExceptionHandler(AccessDeniedException::class)
+    fun handleAccessDeniedException(
+        exception: AccessDeniedException,
+        request: HttpServletRequest
+    ): ResponseEntity<ApiErrorResponse> {
+        val requestId = requestId(request)
+        logger.warn("API access denied: requestId={}, path={}", requestId, request.requestURI)
+        return response(
+            HttpStatus.FORBIDDEN,
+            "FORBIDDEN",
+            "이 작업을 수행할 권한이 없습니다.",
+            request,
+            requestId
+        )
+    }
+
+    @ExceptionHandler(PublicApiException::class)
+    fun handlePublicApiException(
+        exception: PublicApiException,
+        request: HttpServletRequest
+    ): ResponseEntity<ApiErrorResponse> {
+        val requestId = requestId(request)
+        logger.warn(
+            "API request rejected: requestId={}, status={}, code={}, path={}",
+            requestId, exception.status.value(), exception.errorCode, request.requestURI
+        )
+        return response(
+            exception.status,
+            exception.errorCode,
+            exception.message.safeReason() ?: "요청을 처리할 수 없습니다.",
+            request,
+            requestId
+        )
+    }
 
     @ExceptionHandler(ResponseStatusException::class)
     fun handleResponseStatusException(
@@ -112,6 +149,22 @@ class GlobalExceptionHandler {
             HttpStatus.CONFLICT,
             "RESOURCE_CONFLICT",
             "이미 등록된 정보와 충돌합니다. 목록을 새로고침한 뒤 다시 확인해주세요.",
+            request,
+            requestId
+        )
+    }
+
+    @ExceptionHandler(OptimisticLockingFailureException::class)
+    fun handleOptimisticLockingFailure(
+        exception: OptimisticLockingFailureException,
+        request: HttpServletRequest
+    ): ResponseEntity<ApiErrorResponse> {
+        val requestId = requestId(request)
+        logger.warn("Concurrent update rejected: requestId={}, path={}", requestId, request.requestURI, exception)
+        return response(
+            HttpStatus.CONFLICT,
+            "CONCURRENT_UPDATE",
+            "다른 요청이 먼저 반영되었습니다. 목록을 새로고침한 뒤 다시 시도해주세요.",
             request,
             requestId
         )
