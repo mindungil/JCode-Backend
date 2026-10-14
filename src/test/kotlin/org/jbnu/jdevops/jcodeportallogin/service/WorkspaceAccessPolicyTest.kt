@@ -10,7 +10,7 @@ import java.time.LocalDateTime
 
 class WorkspaceAccessPolicyTest {
     private val assignments = mock(AssignmentRepository::class.java)
-    private val policy = WorkspaceAccessPolicy(assignments)
+    private val policy = WorkspaceAccessPolicy(assignments, ClosedAssignmentAccess { false })
     private val now = LocalDateTime.of(2026, 9, 13, 12, 0)
 
     @Test

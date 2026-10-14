@@ -54,7 +54,8 @@ class CourseService(
     private val infrastructureOperationStore: CourseInfrastructureOperationStore,
     private val redisService: RedisService,
     @Value("\${HARBOR_REGISTRY:harbor.jedutools.io}")
-    private val harborRegistry: String = "harbor.jedutools.io"
+    private val harborRegistry: String = "harbor.jedutools.io",
+    private val workspaceAccessPolicy: WorkspaceAccessPolicy? = null
 ) {
     private data class ResolvedWorkspaceProfile(
         val type: CourseEnvironmentProfile,
@@ -223,10 +224,16 @@ class CourseService(
     // 강의별 과제 조회
     @Transactional(readOnly = true)
     fun getAssignmentsByCourse(courseId: Long, email: String): List<AssignmentDto> {
-        requireCourseRole(courseId, email)
+        val role = requireCourseRole(courseId, email)
         val assignments = assignmentRepository.findByCourseId(courseId)
 
         if (assignments.isEmpty()) return emptyList()
+
+        val studentAccess = if (role == RoleType.STUDENT && workspaceAccessPolicy != null) {
+            val user = userRepository.findByEmail(email)
+            val membership = user?.let { userCoursesRepository.findByUserIdAndCourseId(it.id, courseId) }
+            membership?.let { workspaceAccessPolicy.studentAccess(assignments, it) }.orEmpty()
+        } else emptyMap()
 
         val starters = starterArtifactRepository.findByAssignmentCourseIdAndStatusOrderByVersionDesc(
             courseId, org.jbnu.jdevops.jcodeportallogin.entity.StarterArtifactStatus.READY
@@ -255,7 +262,8 @@ class CourseService(
                 kickoffDate = it.kickoffDate,
                 deadlineDate = it.deadlineDate,
                 createdAt = it.createdAt.toString(),
-                updatedAt = it.updatedAt.toString()
+                updatedAt = it.updatedAt.toString(),
+                studentAccess = studentAccess[it.id]
             )
         }
     }

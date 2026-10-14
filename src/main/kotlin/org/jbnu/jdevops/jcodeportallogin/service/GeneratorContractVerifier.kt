@@ -16,6 +16,9 @@ class GeneratorContractVerifier(
     @Volatile
     private var verifiedUntilNanos: Long = 0
 
+    @Volatile
+    private var features: Set<String> = emptySet()
+
     fun requireCompatible() {
         if (System.nanoTime() < verifiedUntilNanos) return
         synchronized(this) {
@@ -34,7 +37,18 @@ class GeneratorContractVerifier(
                     "Generator contract version mismatch: expected=$expectedVersion, actual=${actual ?: "missing"}"
                 )
             }
+            features = (response["features"] as? Collection<*>)
+                ?.mapNotNull { it?.toString() }
+                ?.toSet()
+                .orEmpty()
             verifiedUntilNanos = System.nanoTime() + Duration.ofSeconds(cacheSeconds.coerceAtLeast(1)).toNanos()
         }
+    }
+
+    // Features come from whichever replica answered the cached contract call, so
+    // Backend flags that depend on them are enabled only after a Generator rollout.
+    fun supports(feature: String): Boolean {
+        requireCompatible()
+        return feature in features
     }
 }

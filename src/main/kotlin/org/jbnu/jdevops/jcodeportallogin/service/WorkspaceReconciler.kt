@@ -20,6 +20,7 @@ class WorkspaceReconciler(
     private val operationStore: WorkspaceOperationStore,
     private val workspaceAccessPolicy: WorkspaceAccessPolicy,
     private val generatorContractVerifier: GeneratorContractVerifier,
+    private val closedAssignmentAccess: ClosedAssignmentAccess,
     @Qualifier("generatorWorkspaceWebClient") private val generator: WebClient,
     @Value("\${workspace.lifecycle.batch-size:20}") private val batchSize: Int,
     @Value("\${workspace.lifecycle.request-timeout-seconds:90}") private val timeoutSeconds: Long
@@ -216,6 +217,8 @@ class WorkspaceReconciler(
                     "display_name" to assignment.name,
                     "finalization_generation" to assignment.finalizationGeneration,
                     "retention_days" to assignment.archiveRetentionDays,
+                    // Closed assignments remain listed (read-only) in course workspaces.
+                    "retain_workspace_descriptors" to closedAssignmentAccess.readOnlyEnabled(),
                     "deployments" to jcodes.map { it.first },
                     "services" to jcodes.map { it.second }
                 )
@@ -489,7 +492,8 @@ class WorkspaceReconciler(
             "use_snapshot" to jcode.snapshot,
             "hw_count" to course.hwCount,
             "prac_count" to if (course.pracEnabled) course.pracCount else 0,
-            "assignment_dirs" to plan.assignments.map { it.workspaceKey },
+            "assignment_dirs" to plan.assignments.filterNot { it.readOnly }.map { it.workspaceKey },
+            "read_only_assignment_dirs" to plan.assignments.filter { it.readOnly }.map { it.workspaceKey },
             "assignment_labels" to plan.assignments.associate { it.workspaceKey to it.displayName },
             "policy_revision" to plan.revision,
             "mount_hash" to plan.mountHash,

@@ -32,6 +32,7 @@ class WorkspaceReconcilerTest {
         operationStore,
         accessPolicy,
         contractVerifier,
+        ClosedAssignmentAccess { false },
         WebClient.builder().build(),
         1,
         1
@@ -194,8 +195,9 @@ class WorkspaceReconcilerTest {
         `when`(operationStore.loadJcode(jcode.id)).thenReturn(jcode)
         val reconcilerWithRealPolicy = WorkspaceReconciler(
             operationStore,
-            WorkspaceAccessPolicy(mock(AssignmentRepository::class.java)),
+            WorkspaceAccessPolicy(mock(AssignmentRepository::class.java), ClosedAssignmentAccess { false }),
             contractVerifier,
+            ClosedAssignmentAccess { false },
             WebClient.builder().build(),
             1,
             1

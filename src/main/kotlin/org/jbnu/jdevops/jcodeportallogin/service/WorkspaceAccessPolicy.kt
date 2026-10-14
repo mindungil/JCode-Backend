@@ -11,8 +11,12 @@ import java.time.LocalDateTime
 data class WorkspaceAssignmentMount(
     val assignmentId: Long,
     val workspaceKey: String,
-    val displayName: String
+    val displayName: String,
+    // Closed assignments stay visible to their students but are mounted read-only.
+    val readOnly: Boolean = false
 )
+
+enum class StudentAssignmentAccess { WRITE, READ_ONLY, NONE }
 
 data class WorkspaceAccessPlan(
     val revision: Long,
@@ -23,30 +27,34 @@ data class WorkspaceAccessPlan(
 
 @Service
 class WorkspaceAccessPolicy(
-    private val assignmentRepository: AssignmentRepository
+    private val assignmentRepository: AssignmentRepository,
+    private val closedAssignmentAccess: ClosedAssignmentAccess
 ) {
     fun plan(jcode: Jcode, now: LocalDateTime = LocalDateTime.now()): WorkspaceAccessPlan {
-        val selectedAssignments = if (jcode.kind == JcodeKind.INSPECTOR) {
+        val selectedAssignments: List<Pair<Assignment, Boolean>> = if (jcode.kind == JcodeKind.INSPECTOR) {
             jcode.assignment
                 ?.takeIf { it.lifecycleStatus == AssignmentLifecycleStatus.ACTIVE }
-                ?.let(::listOf)
+                ?.let { listOf(it to false) }
                 ?: emptyList()
         } else if (eligibleAssignmentWorkspace(jcode)) {
             jcode.assignment
                 ?.takeIf { isStudentAccessible(it, now) }
-                ?.let(::listOf)
+                ?.let { listOf(it to false) }
                 ?: emptyList()
         } else if (eligibleStudentWorkspace(jcode)) {
-            assignmentRepository.findByCourseId(jcode.course.id)
-                .asSequence()
-                .filter { isStudentAccessible(it, now) }
-                .sortedBy { it.id }
-                .toList()
+            val courseAssignments = assignmentRepository.findByCourseId(jcode.course.id)
+            val writable = courseAssignments.filter { isStudentAccessible(it, now) }
+            val closed = courseAssignments.filter { isClosedForStudent(it, jcode.userCourse, now) }
+            // The Generator capability is checked only when a closed assignment exists,
+            // so courses without one keep their current plan and Generator dependency.
+            val readOnly = if (closed.isNotEmpty() && closedAssignmentAccess.readOnlyEnabled()) closed else emptyList()
+            (writable.map { it to false } + readOnly.map { it to true })
+                .sortedBy { it.first.id }
         } else {
             emptyList()
         }
-        val assignments = selectedAssignments.map {
-            WorkspaceAssignmentMount(it.id, it.workspaceKey, it.name)
+        val assignments = selectedAssignments.map { (assignment, readOnly) ->
+            WorkspaceAssignmentMount(assignment.id, assignment.workspaceKey, assignment.name, readOnly)
         }
         return WorkspaceAccessPlan(
             revision = jcode.desiredRevision,
@@ -55,9 +63,67 @@ class WorkspaceAccessPolicy(
             validUntil = if (jcode.kind == JcodeKind.INSPECTOR) {
                 null
             } else {
-                selectedAssignments.minOfOrNull { it.deadlineDate }
+                // Read-only mounts never end a session; only writable work has a deadline.
+                selectedAssignments.filterNot { it.second }.minOfOrNull { it.first.deadlineDate }
             }
         )
+    }
+
+    /**
+     * Portal hint for a student's assignment list. A Generator outage must not break
+     * the list, so read-only access is reported as unavailable in that case.
+     */
+    fun studentAccess(
+        assignments: List<Assignment>,
+        membership: UserCourses,
+        now: LocalDateTime = LocalDateTime.now()
+    ): Map<Long, StudentAssignmentAccess> {
+        val closed = assignments.filter { isClosedForStudent(it, membership, now) }.map { it.id }.toSet()
+        val readOnlyEnabled = membership.role == RoleType.STUDENT &&
+            closed.isNotEmpty() &&
+            runCatching { closedAssignmentAccess.readOnlyEnabled() }.getOrDefault(false)
+        return assignments.associate {
+            it.id to when {
+                isStudentAccessible(it, now) -> StudentAssignmentAccess.WRITE
+                readOnlyEnabled && it.id in closed && it.course.workspaceScope == WorkspaceScope.COURSE ->
+                    StudentAssignmentAccess.READ_ONLY
+                else -> StudentAssignmentAccess.NONE
+            }
+        }
+    }
+
+    /** Whether a student may open this assignment from the portal, writable or read-only. */
+    fun isStudentLaunchable(
+        assignment: Assignment,
+        membership: UserCourses,
+        now: LocalDateTime = LocalDateTime.now()
+    ): Boolean = isStudentAccessible(assignment, now) || isStudentReadOnlyAccessible(assignment, membership, now)
+
+    fun isStudentReadOnlyAccessible(
+        assignment: Assignment,
+        membership: UserCourses,
+        now: LocalDateTime = LocalDateTime.now()
+    ): Boolean =
+        assignment.course.workspaceScope == WorkspaceScope.COURSE &&
+            membership.role == RoleType.STUDENT &&
+            isClosedForStudent(assignment, membership, now) &&
+            closedAssignmentAccess.readOnlyEnabled()
+
+    private fun isClosedForStudent(assignment: Assignment, membership: UserCourses, now: LocalDateTime): Boolean {
+        if (assignment.course.status != CourseStatus.ACTIVE) return false
+        val closedAt = when {
+            assignment.lifecycleStatus == AssignmentLifecycleStatus.ACTIVE &&
+                !now.isBefore(assignment.deadlineDate) -> assignment.deadlineDate
+            // A reopen keeps the finalized work visible until the restore succeeds, so
+            // the mount set does not flap while RESTORE_ASSIGNMENT is pending or retried.
+            assignment.lifecycleStatus in setOf(
+                AssignmentLifecycleStatus.PROVISIONING,
+                AssignmentLifecycleStatus.PROVISION_FAILED
+            ) && assignment.finalizedAt != null -> assignment.finalizedAt
+            else -> return false
+        }
+        // Members who joined after the deadline never had this assignment directory.
+        return membership.createdAt.isBefore(closedAt)
     }
 
     fun isStudentAccessible(assignment: Assignment, now: LocalDateTime = LocalDateTime.now()): Boolean =
@@ -92,6 +158,9 @@ class WorkspaceAccessPolicy(
                 append(it.assignmentId)
                 append('\u0000')
                 append(it.workspaceKey)
+                // Writable entries keep their historical encoding, so enabling read-only
+                // access restarts only workspaces whose mounts actually change.
+                if (it.readOnly) append("\u0000ro")
             }
         }
         return MessageDigest.getInstance("SHA-256")

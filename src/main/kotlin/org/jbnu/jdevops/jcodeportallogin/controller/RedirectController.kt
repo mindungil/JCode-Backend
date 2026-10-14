@@ -119,7 +119,8 @@ class RedirectController(
         }
         if (assignment != null) {
             val accessible = if (ownerStudent) {
-                workspaceAccessPolicy.isStudentAccessible(assignment)
+                // Closed assignments of a course workspace open read-only for their students.
+                workspaceAccessPolicy.isStudentLaunchable(assignment, targetMembership)
             } else {
                 assignment.lifecycleStatus == org.jbnu.jdevops.jcodeportallogin.entity.AssignmentLifecycleStatus.ACTIVE
             }

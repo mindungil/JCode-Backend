@@ -7,6 +7,7 @@ import java.time.LocalDateTime
 import org.jbnu.jdevops.jcodeportallogin.entity.AssignmentLifecycleStatus
 import org.jbnu.jdevops.jcodeportallogin.entity.AssignmentScheduleStatus
 import org.jbnu.jdevops.jcodeportallogin.entity.StarterOverwritePolicy
+import org.jbnu.jdevops.jcodeportallogin.service.StudentAssignmentAccess
 
 data class AssignmentDto(
     val assignmentId: Long? = null,
@@ -40,5 +41,7 @@ data class AssignmentDto(
     val deadlineDate: LocalDateTime,
 
     val createdAt: String? = null,
-    val updatedAt: String? = null
+    val updatedAt: String? = null,
+    // Set only for the requesting student: WRITE, READ_ONLY (closed, view only) or NONE.
+    val studentAccess: StudentAssignmentAccess? = null
 )
