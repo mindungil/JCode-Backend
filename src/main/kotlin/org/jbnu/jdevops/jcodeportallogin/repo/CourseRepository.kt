@@ -21,4 +21,5 @@ interface CourseRepository : JpaRepository<Course, Long> {
     fun findByInfrastructureKeyAndClss(infrastructureKey: String, clss: Int): List<Course>
     fun existsByNamespaceKey(namespaceKey: String): Boolean
     fun findByWorkspacePolicyInitializedFalse(): List<Course>
+    fun findByStatusAndWorkspaceRuntimeEnabledTrue(status: org.jbnu.jdevops.jcodeportallogin.entity.CourseStatus): List<Course>
 }

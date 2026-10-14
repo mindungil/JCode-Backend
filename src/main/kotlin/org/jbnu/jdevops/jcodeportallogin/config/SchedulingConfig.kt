@@ -9,8 +9,9 @@ class SchedulingConfig {
     @Bean("taskScheduler")
     fun taskScheduler() = ThreadPoolTaskScheduler().apply {
         // Workspace and course reconcilers block while waiting for Generator. Keep
-        // schedule transitions and inspector cleanup independent from those waits.
-        poolSize = 4
+        // schedule transitions, inspector cleanup and IDE notice publishing independent
+        // from those waits.
+        poolSize = 5
         setThreadNamePrefix("jcode-scheduler-")
         setWaitForTasksToCompleteOnShutdown(false)
     }

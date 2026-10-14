@@ -80,4 +80,28 @@ interface AssignmentRepository : JpaRepository<Assignment, Long> {
         @Param("closedStatus") closedStatus: AssignmentScheduleStatus,
         @Param("now") now: LocalDateTime
     ): List<Assignment>
+
+    @Query(
+        """
+        select assignment from Assignment assignment
+        where assignment.course.status = :courseStatus
+          and assignment.course.workspaceRuntimeEnabled = true
+          and assignment.lifecycleStatus = :assignmentStatus
+          and (
+            (assignment.scheduleStatus = :scheduledStatus and
+                assignment.kickoffDate > :now and assignment.kickoffDate <= :until)
+            or (assignment.scheduleStatus in :beforeDeadline and
+                assignment.deadlineDate > :now and assignment.deadlineDate <= :until)
+          )
+        order by assignment.id
+        """
+    )
+    fun findUpcomingScheduleTransitions(
+        @Param("courseStatus") courseStatus: CourseStatus,
+        @Param("assignmentStatus") assignmentStatus: AssignmentLifecycleStatus,
+        @Param("scheduledStatus") scheduledStatus: AssignmentScheduleStatus,
+        @Param("beforeDeadline") beforeDeadline: Collection<AssignmentScheduleStatus>,
+        @Param("now") now: LocalDateTime,
+        @Param("until") until: LocalDateTime
+    ): List<Assignment>
 }
