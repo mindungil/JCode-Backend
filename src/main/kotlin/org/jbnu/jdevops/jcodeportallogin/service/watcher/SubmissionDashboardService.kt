@@ -46,7 +46,10 @@ class SubmissionDashboardService(
     private data class WatcherFetch<T>(val value: T, val available: Boolean)
 
     private data class BulkDashboardRequest(
-        @JsonProperty("student_ids") val studentIds: List<Int>
+        @JsonProperty("student_ids") val studentIds: List<Int>,
+        // Activity after the deadline (e.g. runs inside a read-only closed assignment)
+        // is not part of the submission. Older Watchers ignore this field.
+        @JsonProperty("until") val until: String? = null
     )
 
     private data class BulkStudentSummary(
@@ -110,7 +113,12 @@ class SubmissionDashboardService(
             webClient.post()
                 .uri("/api/dashboard/{class_div}/{hw_name}/summary", classDiv, assignment.watcherHwName())
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(BulkDashboardRequest(students.map { it.first }))
+                .bodyValue(
+                    BulkDashboardRequest(
+                        students.map { it.first },
+                        assignment.deadlineDate.atZone(ZoneId.of("Asia/Seoul")).toOffsetDateTime().toString()
+                    )
+                )
                 .retrieve()
                 .bodyToMono(BulkDashboardResponse::class.java)
                 .timeout(Duration.ofSeconds(10))
