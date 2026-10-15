@@ -190,7 +190,8 @@ class RedisService(
         mode: String,
         revision: Long,
         mountHash: String,
-        expiresAt: Instant = Instant.now().plus(Duration.ofHours(6))
+        expiresAt: Instant = Instant.now().plus(Duration.ofHours(6)),
+        courseRole: String? = null
     ): String {
         // UUID 생성
         val id = UUID.randomUUID().toString()
@@ -214,7 +215,7 @@ class RedisService(
             "mountHash" to mountHash,
             "expiresAt" to expiresAt.epochSecond.toString(),
             "routeVersion" to "3"
-        )
+        ) + (courseRole?.let { mapOf("courseRole" to it) } ?: emptyMap())
         // Redis 해시에 여러 필드를 한 번에 저장
         redisTemplate.opsForHash<String, String>().putAll(key, userInfo)
 

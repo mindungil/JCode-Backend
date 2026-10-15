@@ -201,7 +201,9 @@ class RedirectController(
             if (inspectorMode) "INSPECTOR" else "OWNER",
             storedJcode.observedRevision,
             plan.mountHash,
-            expiresAt
+            expiresAt,
+            // Lets the router send schedule warnings only to students, whose IDE restarts.
+            targetMembership.role.name
         )
         val encodedUUID = URLEncoder.encode(uuid, StandardCharsets.UTF_8.toString()).replace("+", "%2B")
 
