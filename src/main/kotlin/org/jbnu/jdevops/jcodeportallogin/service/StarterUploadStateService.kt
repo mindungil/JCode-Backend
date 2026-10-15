@@ -215,7 +215,7 @@ class StarterUploadStateService(
             } else {
                 assignment.starterDistributionPending = true
                 assignmentRepository.save(assignment)
-                workspacePolicyRevisionService.bump(assignment.course.id)
+                workspacePolicyRevisionService.bump(assignment.course.id, PolicyChangeReason.STARTER_DISTRIBUTED)
             }
             workspaceOperationStore.enqueue(
                 WorkspaceOperationTarget.ASSIGNMENT,

@@ -23,7 +23,8 @@ class WorkspaceReconciler(
     private val closedAssignmentAccess: ClosedAssignmentAccess,
     @Qualifier("generatorWorkspaceWebClient") private val generator: WebClient,
     @Value("\${workspace.lifecycle.batch-size:20}") private val batchSize: Int,
-    @Value("\${workspace.lifecycle.request-timeout-seconds:90}") private val timeoutSeconds: Long
+    @Value("\${workspace.lifecycle.request-timeout-seconds:90}") private val timeoutSeconds: Long,
+    private val redisService: RedisService? = null
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val skipped = mapOf("_skipStateUpdate" to true)
@@ -392,6 +393,9 @@ class WorkspaceReconciler(
                     superseded
                 } else {
                     val plan = workspaceAccessPolicy.plan(jcode)
+                    // A policy bump keeps the route of a workspace whose mounts do not
+                    // change; revoke it only now, after the restart notice period.
+                    if (plan.mountHash != jcode.observedMountHash) redisService?.deleteJcodeRoute(jcode.id)
                     post(
                         "/api/jcode",
                         "jcode:write",

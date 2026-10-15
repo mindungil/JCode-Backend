@@ -136,7 +136,7 @@ class UserService(
                 .map { it.course }
                 .filter { it.status == CourseStatus.ACTIVE && it.workspaceRuntimeEnabled }
                 .distinctBy { it.id }
-                .forEach { workspacePolicyRevisionService.bump(it.id) }
+                .forEach { workspacePolicyRevisionService.bump(it.id, PolicyChangeReason.PROFILE_CHANGED) }
         }
 
         return mapOf("message" to message)
@@ -532,7 +532,7 @@ class UserService(
             } else if (newRole != RoleType.STUDENT) {
                 jCodeService.expireStudentOnlySessions(userCourse)
             }
-            workspacePolicyRevisionService.bump(course.id)
+            workspacePolicyRevisionService.bump(course.id, PolicyChangeReason.MEMBER_ROLE_CHANGED)
         } else {
             if (currentUser.role != RoleType.ADMIN) {
                 throw ResponseStatusException(HttpStatus.FORBIDDEN, "전역 권한은 관리자만 변경할 수 있습니다.")

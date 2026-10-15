@@ -488,7 +488,7 @@ class WorkspaceOperationStore(
                         }
                         it.updatedAt = LocalDateTime.now()
                         assignmentRepository.save(it)
-                        workspacePolicyRevisionService.bump(it.course.id)
+                        workspacePolicyRevisionService.bump(it.course.id, PolicyChangeReason.ASSIGNMENT_CREATED)
                         enqueueMissingStudentWorkspaceCatchUp(it.course, result, stored.idempotencyKey)
                         if (it.scheduleStatus == AssignmentScheduleStatus.CLOSED && it.finalizedAt == null) {
                             enqueueOnce(
@@ -531,7 +531,7 @@ class WorkspaceOperationStore(
                     it.lastError = null
                     it.updatedAt = LocalDateTime.now()
                     assignmentRepository.save(it)
-                    workspacePolicyRevisionService.bump(it.course.id)
+                    workspacePolicyRevisionService.bump(it.course.id, PolicyChangeReason.ASSIGNMENT_REOPENED)
                     enqueueMissingStudentWorkspaceCatchUp(it.course, result, stored.idempotencyKey)
                 } else if (it.lifecycleStatus == AssignmentLifecycleStatus.PROVISIONING) {
                     // A restore accepted by an active course may finish after the course has
@@ -585,7 +585,7 @@ class WorkspaceOperationStore(
                     }
                     assignment.starterDistributionPending = false
                     assignmentRepository.save(assignment)
-                    workspacePolicyRevisionService.bump(assignment.course.id)
+                    workspacePolicyRevisionService.bump(assignment.course.id, PolicyChangeReason.STARTER_DISTRIBUTED)
                 }
             }
             WorkspaceOperationAction.ARCHIVE_FINAL_SUBMISSION -> {

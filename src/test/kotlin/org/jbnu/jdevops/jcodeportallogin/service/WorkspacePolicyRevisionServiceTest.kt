@@ -31,7 +31,11 @@ class WorkspacePolicyRevisionServiceTest {
     private val courseRepository = mock(CourseRepository::class.java)
     private val jCodeRepository = mock(JCodeRepository::class.java)
     private val operationRepository = mock(WorkspaceOperationRepository::class.java)
-    private val redisService = mock(RedisService::class.java)
+    private val redisCalls = mutableListOf<Pair<String, List<Any?>>>()
+    private val redisService = mock(RedisService::class.java) { invocation ->
+        redisCalls += invocation.method.name to invocation.arguments.toList()
+        null
+    }
     private val service = WorkspacePolicyRevisionService(
         courseRepository,
         jCodeRepository,
@@ -100,13 +104,48 @@ class WorkspacePolicyRevisionServiceTest {
 
         assertEquals(5, studentWorkspace.desiredRevision)
         assertEquals(4, inspector.desiredRevision)
-        verify(redisService).deleteJcodeRoute(studentWorkspace.id)
-        verify(redisService, never()).deleteJcodeRoute(inspector.id)
+        // The open IDE is warned first; its route is revoked by the delayed reconcile.
+        assertTrue(redisCalls.none { it.first == "deleteJcodeRoute" })
+        val notice = redisCalls.single { it.first == "storeRestartNotice" }.second
+        assertEquals(listOf<Any?>(studentWorkspace.id, "5", PolicyChangeReason.POLICY_CHANGED), notice.take(3))
         val operation = ArgumentCaptor.forClass(WorkspaceOperation::class.java)
         verify(operationRepository).save(operation.capture())
         assertEquals(WorkspaceOperationAction.RECONCILE_JCODE_ACCESS, operation.value.action)
         assertEquals(studentWorkspace.id, operation.value.targetId)
         assertEquals(5, operation.value.desiredRevision)
+        assertTrue(operation.value.nextAttemptAt.isAfter(LocalDateTime.now().plusSeconds(3)))
+    }
+
+    @Test
+    fun `workspaces whose mounts do not change keep their session`() {
+        val course = Course(
+            id = 31, name = "Algorithms", infrastructureKey = "algo", year = 2026, term = 2,
+            professor = "Professor", clss = 1, vnc = false, courseKey = "course-key", workspacePolicyRevision = 8
+        )
+        val user = User(id = 32, email = "prof@example.com", studentNum = 1, role = RoleType.PROFESSOR)
+        val membership = UserCourses(
+            id = 33, course = course, user = user, role = RoleType.PROFESSOR, lifecycleStatus = MembershipStatus.READY
+        )
+        val managerWorkspace = Jcode(
+            id = 34, userCourse = membership, course = course, user = user,
+            lifecycleStatus = JcodeLifecycleStatus.READY, desiredRevision = 8,
+            observedRevision = 8, observedMountHash = "same"
+        )
+        val policy = mock(WorkspaceAccessPolicy::class.java) { invocation ->
+            if (invocation.method.name == "plan") WorkspaceAccessPlan(9, "same", emptyList(), null)
+            else org.mockito.Mockito.RETURNS_DEFAULTS.answer(invocation)
+        }
+        val keeping = WorkspacePolicyRevisionService(courseRepository, jCodeRepository, operationRepository, redisService, policy, 5)
+        `when`(courseRepository.findByIdForUpdate(course.id)).thenReturn(Optional.of(course))
+        `when`(jCodeRepository.findByCourseId(course.id)).thenReturn(listOf(managerWorkspace))
+        `when`(operationRepository.existsByIdempotencyKey(org.mockito.ArgumentMatchers.anyString())).thenReturn(false)
+
+        keeping.bump(course.id, PolicyChangeReason.ASSIGNMENT_CREATED)
+
+        assertTrue(redisCalls.isEmpty(), "no restart notice and no route revocation")
+        val operation = ArgumentCaptor.forClass(WorkspaceOperation::class.java)
+        verify(operationRepository).save(operation.capture())
+        assertFalse(operation.value.nextAttemptAt.isAfter(LocalDateTime.now().plusSeconds(1)))
     }
 
     @Test
@@ -148,9 +187,9 @@ class WorkspacePolicyRevisionServiceTest {
         assertEquals(1, course.workspacePolicyRevision)
         assertTrue(course.workspacePolicyInitialized)
         assertEquals(1, workspace.desiredRevision)
-        verify(redisService).deleteJcodeRoute(workspace.id)
+        assertEquals(listOf("deleteJcodeRoute" to listOf<Any?>(workspace.id)), redisCalls)
 
         assertFalse(service.initializeExistingCourse(course.id))
-        verify(redisService).deleteJcodeRoute(workspace.id)
+        assertEquals(1, redisCalls.size)
     }
 }

@@ -148,7 +148,7 @@ class AssignmentServiceRbacTest {
         assertEquals("new title", result.assignmentName)
         assertEquals("old-dir", result.dirName)
         assert(result.updatedAt != assignment.updatedAt.toString())
-        verify(workspacePolicyRevisionService).bump(course.id)
+        verify(workspacePolicyRevisionService).bump(course.id, PolicyChangeReason.ASSIGNMENT_UPDATED)
     }
 
 
@@ -188,7 +188,7 @@ class AssignmentServiceRbacTest {
         val result = service.updateAssignment(course.id, assignment.id, dto, assistant.email)
 
         assertEquals(extendedDeadline, result.deadlineDate)
-        verify(workspacePolicyRevisionService).bump(course.id)
+        verify(workspacePolicyRevisionService).bump(course.id, PolicyChangeReason.ASSIGNMENT_UPDATED)
     }
 
     @Test
@@ -493,7 +493,7 @@ class AssignmentServiceRbacTest {
             assignment.id,
             org.jbnu.jdevops.jcodeportallogin.entity.WorkspaceOperationAction.ARCHIVE_FINAL_SUBMISSION
         )
-        verify(workspacePolicyRevisionService).bump(assignment.course.id)
+        verify(workspacePolicyRevisionService).bump(assignment.course.id, PolicyChangeReason.ASSIGNMENT_CLOSED)
     }
 
     private fun course(id: Long) = Course(

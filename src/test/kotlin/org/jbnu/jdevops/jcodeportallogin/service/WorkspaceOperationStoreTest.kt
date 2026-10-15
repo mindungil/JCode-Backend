@@ -66,7 +66,7 @@ class WorkspaceOperationStoreTest {
         store.markSucceeded(claimed(stored), mapOf("provisioned" to true))
 
         assertEquals(AssignmentLifecycleStatus.ACTIVE, assignment.lifecycleStatus)
-        verify(workspacePolicyRevisionService).bump(assignment.course.id)
+        verify(workspacePolicyRevisionService).bump(assignment.course.id, PolicyChangeReason.ASSIGNMENT_CREATED)
     }
 
     @Test
@@ -96,7 +96,7 @@ class WorkspaceOperationStoreTest {
         assertEquals(AssignmentLifecycleStatus.DELETING, assignment.lifecycleStatus)
         assertEquals(AssignmentScheduleStatus.CLOSED, assignment.scheduleStatus)
         assertFalse(assignment.starterDistributionPending)
-        verify(workspacePolicyRevisionService, never()).bump(terminatingCourse.id)
+        PolicyChangeReason.entries.forEach { verify(workspacePolicyRevisionService, never()).bump(terminatingCourse.id, it) }
         val captured = ArgumentCaptor.forClass(WorkspaceOperation::class.java)
         verify(operationRepository, times(2)).save(captured.capture())
         assertEquals(WorkspaceOperationAction.ARCHIVE_ASSIGNMENT, captured.allValues.first().action)
@@ -385,7 +385,7 @@ class WorkspaceOperationStoreTest {
 
         assertEquals(AssignmentLifecycleStatus.DELETING, assignment.lifecycleStatus)
         assertNotNull(assignment.finalizedAt)
-        verify(workspacePolicyRevisionService, never()).bump(assignment.course.id)
+        PolicyChangeReason.entries.forEach { verify(workspacePolicyRevisionService, never()).bump(assignment.course.id, it) }
     }
 
     @Test
@@ -415,7 +415,7 @@ class WorkspaceOperationStoreTest {
 
         assertEquals(AssignmentLifecycleStatus.DELETING, assignment.lifecycleStatus)
         assertEquals(AssignmentScheduleStatus.CLOSED, assignment.scheduleStatus)
-        verify(workspacePolicyRevisionService, never()).bump(assignment.course.id)
+        PolicyChangeReason.entries.forEach { verify(workspacePolicyRevisionService, never()).bump(assignment.course.id, it) }
         val captured = ArgumentCaptor.forClass(WorkspaceOperation::class.java)
         verify(operationRepository, times(2)).save(captured.capture())
         assertTrue(captured.allValues.any {
@@ -789,7 +789,7 @@ class WorkspaceOperationStoreTest {
         assertNotNull(artifact.publishedAt)
         assertTrue(assignment.starterDistributionPending)
         assertEquals(WorkspaceOperationStatus.PENDING, stored.status)
-        verify(workspacePolicyRevisionService, never()).bump(course.id)
+        PolicyChangeReason.entries.forEach { verify(workspacePolicyRevisionService, never()).bump(course.id, it) }
         val captured = ArgumentCaptor.forClass(WorkspaceOperation::class.java)
         verify(operationRepository, times(2)).save(captured.capture())
         assertEquals(WorkspaceOperationTarget.MEMBERSHIP, captured.allValues.first().targetType)
@@ -807,7 +807,7 @@ class WorkspaceOperationStoreTest {
 
         assertFalse(assignment.starterDistributionPending)
         assertEquals(WorkspaceOperationStatus.SUCCEEDED, stored.status)
-        verify(workspacePolicyRevisionService).bump(course.id)
+        verify(workspacePolicyRevisionService).bump(course.id, PolicyChangeReason.STARTER_DISTRIBUTED)
     }
 
     @Test
@@ -845,7 +845,7 @@ class WorkspaceOperationStoreTest {
         assertFalse(assignment.hasStarterCode)
         assertEquals(WorkspaceOperationStatus.SUCCEEDED, stored.status)
         verify(assignmentRepository, never()).save(assignment)
-        verify(workspacePolicyRevisionService, never()).bump(course.id)
+        PolicyChangeReason.entries.forEach { verify(workspacePolicyRevisionService, never()).bump(course.id, it) }
     }
 
     @Test
@@ -883,7 +883,7 @@ class WorkspaceOperationStoreTest {
 
         assertFalse(assignment.starterDistributionPending)
         assertEquals(WorkspaceOperationStatus.SUCCEEDED, stored.status)
-        verify(workspacePolicyRevisionService).bump(course.id)
+        verify(workspacePolicyRevisionService).bump(course.id, PolicyChangeReason.STARTER_DISTRIBUTED)
     }
 
     @Test

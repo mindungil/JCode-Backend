@@ -269,6 +269,46 @@ class ClosedAssignmentReadOnlyTest {
     }
 
     @Test
+    fun `delayed reconcile revokes the route only when the mounts change`() {
+        for ((observed, revoked) in listOf("a".repeat(64) to false, "b".repeat(64) to true)) {
+            val jcode = studentJcode().also {
+                it.lifecycleStatus = JcodeLifecycleStatus.READY
+                it.observedMountHash = observed
+            }
+            val plan = WorkspaceAccessPlan(jcode.desiredRevision, "a".repeat(64), emptyList(), null)
+            val accessPolicy = mock(WorkspaceAccessPolicy::class.java) { invocation ->
+                if (invocation.method.name == "plan") plan else RETURNS_DEFAULTS.answer(invocation)
+            }
+            val operationStore = mock(WorkspaceOperationStore::class.java)
+            val operation = operation(WorkspaceOperationTarget.JCODE, jcode.id, WorkspaceOperationAction.RECONCILE_JCODE_ACCESS, jcode.desiredRevision)
+            `when`(operationStore.claimNext()).thenReturn(operation)
+            `when`(operationStore.loadJcode(jcode.id)).thenReturn(jcode)
+            val deleted = mutableListOf<Long>()
+            val redis = mock(RedisService::class.java) { invocation ->
+                if (invocation.method.name == "deleteJcodeRoute") deleted += invocation.arguments[0] as Long
+                null
+            }
+            val generator = WebClient.builder().exchangeFunction {
+                Mono.just(
+                    ClientResponse.create(HttpStatus.OK, ExchangeStrategies.withDefaults())
+                        .header("Content-Type", "application/json")
+                        .body("""{"state":"READY"}""")
+                        .build()
+                )
+            }.build()
+            val withRedis = WorkspaceReconciler(
+                operationStore, accessPolicy,
+                mock(GeneratorContractVerifier::class.java), CountingAccess(true),
+                generator, 1, 5, redis
+            )
+
+            withRedis.reconcile()
+
+            assertEquals(if (revoked) listOf(jcode.id) else emptyList<Long>(), deleted)
+        }
+    }
+
+    @Test
     fun `reconciler waits for a Generator that supports read-only mounts`() {
         val jcode = studentJcode().also { it.lifecycleStatus = JcodeLifecycleStatus.READY }
         val plan = WorkspaceAccessPlan(

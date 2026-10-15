@@ -220,7 +220,7 @@ class AssignmentService(
         workspaceOperationStore.enqueue(
             WorkspaceOperationTarget.ASSIGNMENT, saved.id, WorkspaceOperationAction.UPDATE_ASSIGNMENT_METADATA
         )
-        if (accessPolicyChanged) workspacePolicyRevisionService.bump(saved.course.id)
+        if (accessPolicyChanged) workspacePolicyRevisionService.bump(saved.course.id, PolicyChangeReason.ASSIGNMENT_UPDATED)
         if (closing || suspending) {
             closeAssignmentJcodes(saved.id, includeInspectors = false)
         }
@@ -316,7 +316,7 @@ class AssignmentService(
         assignment.lastError = null
         assignmentRepository.save(assignment)
         closeAssignmentJcodes(assignment.id)
-        workspacePolicyRevisionService.bump(assignment.course.id)
+        workspacePolicyRevisionService.bump(assignment.course.id, PolicyChangeReason.ASSIGNMENT_DELETED)
         workspaceOperationStore.enqueue(
             WorkspaceOperationTarget.ASSIGNMENT, assignment.id, WorkspaceOperationAction.ARCHIVE_ASSIGNMENT
         )
@@ -375,7 +375,7 @@ class AssignmentService(
     @Transactional
     fun refreshScheduleStatuses() {
         val now = LocalDateTime.now()
-        val changedCourseIds = mutableSetOf<Long>()
+        val changedCourseIds = mutableMapOf<Long, PolicyChangeReason>()
         assignmentRepository.findExpiredStarterUploadReservationsForUpdate(
             AssignmentLifecycleStatus.ACTIVE,
             StarterArtifactStatus.UPLOADING,
@@ -428,7 +428,12 @@ class AssignmentService(
                 }
                 assignment.updatedAt = now
                 assignmentRepository.save(assignment)
-                changedCourseIds += assignment.course.id
+                // A deadline ends sessions; report it over a kickoff in the same tick.
+                if (expected == AssignmentScheduleStatus.CLOSED) {
+                    changedCourseIds[assignment.course.id] = PolicyChangeReason.ASSIGNMENT_CLOSED
+                } else {
+                    changedCourseIds.putIfAbsent(assignment.course.id, PolicyChangeReason.ASSIGNMENT_OPENED)
+                }
                 if (expected == AssignmentScheduleStatus.CLOSED) {
                     closeAssignmentJcodes(assignment.id, includeInspectors = false)
                     workspaceOperationStore.enqueue(
@@ -439,6 +444,6 @@ class AssignmentService(
                 }
             }
         }
-        changedCourseIds.forEach(workspacePolicyRevisionService::bump)
+        changedCourseIds.forEach { (courseId, reason) -> workspacePolicyRevisionService.bump(courseId, reason) }
     }
 }

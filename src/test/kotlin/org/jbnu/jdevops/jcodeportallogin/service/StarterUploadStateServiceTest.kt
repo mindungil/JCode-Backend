@@ -150,7 +150,7 @@ class StarterUploadStateServiceTest {
             .thenReturn(Optional.of(assignment))
         `when`(artifactRepository.findById(artifact.id)).thenReturn(Optional.of(artifact))
         `when`(jcodeRepository.findByAssignmentId(assignment.id)).thenReturn(listOf(inspector))
-        `when`(policyRevisionService.bump(course.id)).thenReturn(7)
+        `when`(policyRevisionService.bump(course.id, PolicyChangeReason.STARTER_DISTRIBUTED)).thenReturn(7)
 
         val result = service.complete(reservation, "0".repeat(64), 128, true)
 

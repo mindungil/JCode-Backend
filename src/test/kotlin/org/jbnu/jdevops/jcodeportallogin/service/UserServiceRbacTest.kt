@@ -197,7 +197,7 @@ class UserServiceRbacTest {
 
         assertEquals(RoleType.ASSISTANT, targetMembership.role)
         verify(jCodeService).expireStudentOnlySessions(targetMembership)
-        verify(workspacePolicyRevisionService).bump(course.id)
+        verify(workspacePolicyRevisionService).bump(course.id, PolicyChangeReason.MEMBER_ROLE_CHANGED)
     }
 
     @Test
@@ -224,7 +224,7 @@ class UserServiceRbacTest {
             targetMembership.id,
             WorkspaceOperationAction.PROVISION_MEMBERSHIP
         )
-        verify(workspacePolicyRevisionService).bump(course.id)
+        verify(workspacePolicyRevisionService).bump(course.id, PolicyChangeReason.MEMBER_ROLE_CHANGED)
     }
 
     @Test

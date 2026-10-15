@@ -76,6 +76,14 @@ class RedisService(
         redisTemplate.delete("jcode:$jcodeId:route")
     }
 
+    // Read by the router notice stream of this JCode's open IDE pages.
+    fun storeRestartNotice(jcodeId: Long, noticeId: String, reason: PolicyChangeReason, at: Instant) {
+        val value = objectMapper.writeValueAsString(
+            mapOf("id" to noticeId, "reason" to reason.name, "at" to at.toEpochMilli())
+        )
+        redisTemplate.opsForValue().set(restartNoticeKey(jcodeId), value, 120, TimeUnit.SECONDS)
+    }
+
     // 이메일 & 강의코드 & 분반 → 일반·스냅샷 JCode URL을 함께 삭제
     fun deleteUserCourseAccess(email: String, infrastructureKey: String, courseClss: Int) {
         val baseKey = "user:$email:course:$infrastructureKey:$courseClss"
@@ -237,6 +245,8 @@ class RedisService(
     }
 
     companion object {
+        fun restartNoticeKey(jcodeId: Long) = "jcode:notices:jcode:$jcodeId:restart"
+
         private fun tokenDigest(token: String): String = MessageDigest.getInstance("SHA-256")
             .digest(token.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
