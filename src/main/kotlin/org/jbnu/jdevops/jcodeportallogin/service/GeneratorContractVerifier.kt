@@ -17,7 +17,7 @@ class GeneratorContractVerifier(
     private var verifiedUntilNanos: Long = 0
 
     @Volatile
-    private var features: Set<String> = emptySet()
+    private var features: Set<String>? = null
 
     fun requireCompatible() {
         if (System.nanoTime() < verifiedUntilNanos) return
@@ -49,6 +49,12 @@ class GeneratorContractVerifier(
     // Backend flags that depend on them are enabled only after a Generator rollout.
     fun supports(feature: String): Boolean {
         requireCompatible()
-        return feature in features
+        return feature in features.orEmpty()
     }
+
+    /**
+     * Last advertised answer without contacting the Generator (null before the first
+     * successful check). For display paths that must not wait on a busy Generator.
+     */
+    fun lastKnownSupport(feature: String): Boolean? = features?.let { feature in it }
 }

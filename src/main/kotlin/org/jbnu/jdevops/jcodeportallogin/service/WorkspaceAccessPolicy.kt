@@ -44,10 +44,10 @@ class WorkspaceAccessPolicy(
         } else if (eligibleStudentWorkspace(jcode)) {
             val courseAssignments = assignmentRepository.findByCourseId(jcode.course.id)
             val writable = courseAssignments.filter { isStudentAccessible(it, now) }
+            // Ask about read-only access only when a closed assignment exists, so courses
+            // without one never depend on the Generator capability check.
             val closed = courseAssignments.filter { isClosedForStudent(it, jcode.userCourse, now) }
-            // The Generator capability is checked only when a closed assignment exists,
-            // so courses without one keep their current plan and Generator dependency.
-            val readOnly = if (closed.isNotEmpty() && closedAssignmentAccess.readOnlyEnabled()) closed else emptyList()
+            val readOnly = if (closed.isNotEmpty() && closedAssignmentAccess.readOnlyEnabled(now)) closed else emptyList()
             (writable.map { it to false } + readOnly.map { it to true })
                 .sortedBy { it.first.id }
         } else {
@@ -70,23 +70,19 @@ class WorkspaceAccessPolicy(
     }
 
     /**
-     * Portal hint for a student's assignment list. A Generator outage must not break
-     * the list, so read-only access is reported as unavailable in that case.
+     * Portal hint for a student's assignment list; agrees with [isStudentLaunchable].
+     * The list must still load while the Generator is unreachable.
      */
     fun studentAccess(
         assignments: List<Assignment>,
         membership: UserCourses,
         now: LocalDateTime = LocalDateTime.now()
     ): Map<Long, StudentAssignmentAccess> {
-        val closed = assignments.filter { isClosedForStudent(it, membership, now) }.map { it.id }.toSet()
-        val readOnlyEnabled = membership.role == RoleType.STUDENT &&
-            closed.isNotEmpty() &&
-            runCatching { closedAssignmentAccess.readOnlyEnabled() }.getOrDefault(false)
+        val readOnlyEnabled by lazy { closedAssignmentAccess.readOnlyEnabledForDisplay(now) }
         return assignments.associate {
             it.id to when {
                 isStudentAccessible(it, now) -> StudentAssignmentAccess.WRITE
-                readOnlyEnabled && it.id in closed && it.course.workspaceScope == WorkspaceScope.COURSE ->
-                    StudentAssignmentAccess.READ_ONLY
+                readOnlyCandidate(it, membership, now) && readOnlyEnabled -> StudentAssignmentAccess.READ_ONLY
                 else -> StudentAssignmentAccess.NONE
             }
         }
@@ -103,26 +99,29 @@ class WorkspaceAccessPolicy(
         assignment: Assignment,
         membership: UserCourses,
         now: LocalDateTime = LocalDateTime.now()
-    ): Boolean =
+    ): Boolean = readOnlyCandidate(assignment, membership, now) && closedAssignmentAccess.readOnlyEnabled(now)
+
+    private fun readOnlyCandidate(assignment: Assignment, membership: UserCourses, now: LocalDateTime): Boolean =
         assignment.course.workspaceScope == WorkspaceScope.COURSE &&
             membership.role == RoleType.STUDENT &&
-            isClosedForStudent(assignment, membership, now) &&
-            closedAssignmentAccess.readOnlyEnabled()
+            isClosedForStudent(assignment, membership, now)
 
     private fun isClosedForStudent(assignment: Assignment, membership: UserCourses, now: LocalDateTime): Boolean {
         if (assignment.course.status != CourseStatus.ACTIVE) return false
-        val closedAt = when {
-            assignment.lifecycleStatus == AssignmentLifecycleStatus.ACTIVE &&
-                !now.isBefore(assignment.deadlineDate) -> assignment.deadlineDate
+        val closed = when (assignment.lifecycleStatus) {
+            AssignmentLifecycleStatus.ACTIVE -> !now.isBefore(assignment.deadlineDate)
             // A reopen keeps the finalized work visible until the restore succeeds, so
             // the mount set does not flap while RESTORE_ASSIGNMENT is pending or retried.
-            assignment.lifecycleStatus in setOf(
-                AssignmentLifecycleStatus.PROVISIONING,
-                AssignmentLifecycleStatus.PROVISION_FAILED
-            ) && assignment.finalizedAt != null -> assignment.finalizedAt
-            else -> return false
+            AssignmentLifecycleStatus.PROVISIONING,
+            AssignmentLifecycleStatus.PROVISION_FAILED -> assignment.finalizedAt != null
+            else -> false
         }
-        // Members who joined after the deadline never had this assignment directory.
+        if (!closed) return false
+        // One closing time for the whole close/finalize/reopen cycle: finalization never
+        // precedes the deadline, and a pending reopen has already moved the deadline.
+        val closedAt = assignment.finalizedAt?.let { minOf(it, assignment.deadlineDate) } ?: assignment.deadlineDate
+        // Members who joined later never had this assignment directory; the Generator
+        // still mounts an empty placeholder for anyone whose directory is missing.
         return membership.createdAt.isBefore(closedAt)
     }
 

@@ -218,7 +218,7 @@ class WorkspaceReconciler(
                     "finalization_generation" to assignment.finalizationGeneration,
                     "retention_days" to assignment.archiveRetentionDays,
                     // Closed assignments remain listed (read-only) in course workspaces.
-                    "retain_workspace_descriptors" to closedAssignmentAccess.readOnlyEnabled(),
+                    "retain_workspace_descriptors" to closedAssignmentAccess.readOnlyEnabled(LocalDateTime.now()),
                     "deployments" to jcodes.map { it.first },
                     "services" to jcodes.map { it.second }
                 )
@@ -467,6 +467,14 @@ class WorkspaceReconciler(
         namespace: String,
         plan: WorkspaceAccessPlan
     ): Map<String, Any?> {
+        if (plan.assignments.any { it.readOnly } &&
+            !generatorContractVerifier.supports(ScheduledClosedAssignmentAccess.GENERATOR_FEATURE)
+        ) {
+            // An older Generator would reject the read-only labels. Wait instead of
+            // failing, so a premature activation never exhausts retries or deletes JCodes.
+            logger.warn("Generator lacks read-only assignment mounts; deferring JCode {}", jcode.id)
+            throw WorkspaceProvisioningPendingException()
+        }
         val course = jcode.course
         return mapOf(
             "course_id" to course.id,

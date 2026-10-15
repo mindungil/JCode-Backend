@@ -34,10 +34,19 @@ class WorkspaceNoticePublisher(
     private val closedAssignmentAccess: ClosedAssignmentAccess,
     @Value("\${workspace.notices.enabled:false}") private val enabled: Boolean,
     @Value("\${workspace.notices.window-minutes:15}") private val windowMinutes: Long,
-    @Value("\${workspace.notices.ttl-seconds:120}") private val ttlSeconds: Long
+    @Value("\${workspace.notices.ttl-seconds:120}") private val ttlSeconds: Long,
+    // Minutes before a transition at which open IDE pages warn; the last one stays
+    // on screen until dismissed. Sent with every notice, so no image rebuild is needed.
+    @Value("\${workspace.notices.deadline-lead-minutes:10,5,1}") deadlineLeadMinutes: String = "10,5,1",
+    @Value("\${workspace.notices.kickoff-lead-minutes:1}") kickoffLeadMinutes: String = "1"
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val objectMapper = jacksonObjectMapper()
+    private val deadlineLeads = parseLeadMinutes(deadlineLeadMinutes)
+    private val kickoffLeads = parseLeadMinutes(kickoffLeadMinutes)
+    // The window must reach the earliest warning, or that warning could never be shown.
+    private val window = maxOf(windowMinutes, (deadlineLeads + kickoffLeads).maxOrNull()?.toLong() ?: 0L)
+        .coerceIn(1, 60)
 
     @Scheduled(
         fixedDelayString = "\${workspace.notices.publish-delay-ms:15000}",
@@ -54,7 +63,7 @@ class WorkspaceNoticePublisher(
     }
 
     fun publish(now: LocalDateTime) {
-        val until = now.plusMinutes(windowMinutes.coerceIn(1, 60))
+        val until = now.plusMinutes(window)
         val upcoming = assignmentRepository.findUpcomingScheduleTransitions(
             CourseStatus.ACTIVE,
             AssignmentLifecycleStatus.ACTIVE,
@@ -63,8 +72,6 @@ class WorkspaceNoticePublisher(
             now,
             until
         ).groupBy { it.course.id }
-        val readOnlyEnabled = upcoming.isNotEmpty() &&
-            runCatching { closedAssignmentAccess.readOnlyEnabled() }.getOrDefault(false)
         // Courses without upcoming transitions get an empty list, so a moved
         // deadline cancels toasts already scheduled in open IDE pages.
         courseRepository.findByStatusAndWorkspaceRuntimeEnabledTrue(CourseStatus.ACTIVE).forEach { course ->
@@ -73,7 +80,7 @@ class WorkspaceNoticePublisher(
                     if (assignment.scheduleStatus == AssignmentScheduleStatus.SCHEDULED &&
                         assignment.kickoffDate.isAfter(now) &&
                         !assignment.kickoffDate.isAfter(until)
-                    ) add(transition(assignment.id, assignment.name, "KICKOFF", assignment.kickoffDate, false))
+                    ) add(transition(assignment.id, assignment.name, "KICKOFF", assignment.kickoffDate, false, kickoffLeads))
                     if (assignment.deadlineDate.isAfter(now) &&
                         !assignment.deadlineDate.isAfter(until)
                     ) add(
@@ -82,7 +89,9 @@ class WorkspaceNoticePublisher(
                             assignment.name,
                             "DEADLINE",
                             assignment.deadlineDate,
-                            readOnlyEnabled && course.workspaceScope == WorkspaceScope.COURSE
+                            course.workspaceScope == WorkspaceScope.COURSE &&
+                                closedAssignmentAccess.readOnlyEnabledForDisplay(assignment.deadlineDate),
+                            deadlineLeads
                         )
                     )
                 }
@@ -100,7 +109,8 @@ class WorkspaceNoticePublisher(
         assignmentName: String,
         kind: String,
         at: LocalDateTime,
-        readOnlyAfter: Boolean
+        readOnlyAfter: Boolean,
+        leadMinutes: List<Int>
     ): Map<String, Any> {
         val epochMillis = at.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
         return mapOf(
@@ -110,12 +120,24 @@ class WorkspaceNoticePublisher(
             "assignmentName" to assignmentName,
             "kind" to kind,
             "at" to epochMillis,
-            "readOnlyAfter" to readOnlyAfter
+            "readOnlyAfter" to readOnlyAfter,
+            "leadMinutes" to leadMinutes
         )
     }
 
     companion object {
         // The router reads the same key from the launch profile's courseCode/clss.
         fun key(infrastructureKey: String, clss: Int) = "jcode:notices:course:$infrastructureKey:$clss"
+
+        internal fun parseLeadMinutes(value: String): List<Int> {
+            val leads = value.split(',')
+                .mapNotNull { it.trim().toIntOrNull() }
+                .filter { it in 1..60 }
+                .distinct()
+                .sortedDescending()
+                .take(5)
+            require(leads.isNotEmpty()) { "IDE notice lead minutes must contain 1..60: '$value'" }
+            return leads
+        }
     }
 }

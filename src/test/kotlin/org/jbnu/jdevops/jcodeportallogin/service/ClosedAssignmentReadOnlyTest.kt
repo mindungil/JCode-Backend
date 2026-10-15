@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito.RETURNS_DEFAULTS
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.verify
 import org.mockito.Mockito.`when`
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.data.redis.core.ValueOperations
@@ -34,7 +35,7 @@ class ClosedAssignmentReadOnlyTest {
 
     private class CountingAccess(private val enabled: Boolean) : ClosedAssignmentAccess {
         var calls = 0
-        override fun readOnlyEnabled(): Boolean {
+        override fun readOnlyEnabled(now: LocalDateTime): Boolean {
             calls += 1
             return enabled
         }
@@ -72,15 +73,58 @@ class ClosedAssignmentReadOnlyTest {
     }
 
     @Test
-    fun `writable plans keep their historical hash and skip the Generator capability check`() {
+    fun `writable plans keep their historical hash`() {
         val jcode = studentJcode()
         val open = assignment(jcode.course, 62, now.minusDays(1), now.plusDays(1))
-        val access = CountingAccess(true)
-        val enabled = policy(listOf(open), access).plan(jcode, now)
+        val enabled = policy(listOf(open), CountingAccess(true)).plan(jcode, now)
         val legacy = policy(listOf(open), ClosedAssignmentAccess { false }).plan(jcode, now)
 
         assertEquals(legacy.mountHash, enabled.mountHash)
-        assertEquals(0, access.calls)
+    }
+
+    @Test
+    fun `activation is an instant shared by every replica`() {
+        val verifier = mock(GeneratorContractVerifier::class.java)
+        `when`(verifier.supports(ScheduledClosedAssignmentAccess.GENERATOR_FEATURE)).thenReturn(true)
+        val access = ScheduledClosedAssignmentAccess(verifier, "2026-10-20T03:00:00", "")
+        assertFalse(access.readOnlyEnabled(LocalDateTime.of(2026, 10, 20, 2, 59, 59)))
+        assertTrue(access.readOnlyEnabled(LocalDateTime.of(2026, 10, 20, 3, 0)))
+        val window = ScheduledClosedAssignmentAccess(verifier, "2026-10-20T03:00:00", "2026-10-21T03:00:00")
+        assertFalse(window.readOnlyEnabled(LocalDateTime.of(2026, 10, 21, 3, 0)))
+        assertFalse(ScheduledClosedAssignmentAccess(verifier, "", "").readOnlyEnabled(now))
+    }
+
+    @Test
+    fun `an older Generator falls back to hiding closed assignments instead of blocking launches`() {
+        val oldGenerator = mock(GeneratorContractVerifier::class.java)
+        `when`(oldGenerator.supports(ScheduledClosedAssignmentAccess.GENERATOR_FEATURE)).thenReturn(false)
+        val access = ScheduledClosedAssignmentAccess(oldGenerator, "2026-10-01T00:00:00", "")
+        assertFalse(access.readOnlyEnabled(now))
+
+        val jcode = studentJcode()
+        val closed = assignment(jcode.course, 60, now.minusDays(14), now.minusDays(1))
+        val open = assignment(jcode.course, 62, now.minusDays(1), now.plusDays(1))
+        val plan = policy(listOf(closed, open), access).plan(jcode, now)
+        assertEquals(listOf("assignment-62" to false), plan.assignments.map { it.workspaceKey to it.readOnly })
+    }
+
+    @Test
+    fun `an unreachable Generator is reported like the existing launch check`() {
+        val down = mock(GeneratorContractVerifier::class.java)
+        `when`(down.supports(ScheduledClosedAssignmentAccess.GENERATOR_FEATURE)).thenThrow(IllegalStateException("down"))
+        val access = ScheduledClosedAssignmentAccess(down, "2026-10-01T00:00:00", "")
+        val error = org.junit.jupiter.api.assertThrows<org.jbnu.jdevops.jcodeportallogin.exception.PublicApiException> {
+            access.readOnlyEnabled(now)
+        }
+        assertEquals("JCODE_RUNTIME_UNAVAILABLE", error.errorCode)
+
+        // The portal list still loads; closed assignments are just not offered for now.
+        val jcode = studentJcode()
+        val closed = assignment(jcode.course, 60, now.minusDays(14), now.minusDays(1))
+        assertEquals(
+            mapOf(60L to StudentAssignmentAccess.NONE),
+            policy(listOf(closed), access).studentAccess(listOf(closed), jcode.userCourse, now)
+        )
     }
 
     @Test
@@ -107,10 +151,19 @@ class ClosedAssignmentReadOnlyTest {
     fun `members who joined after the deadline get no closed assignment`() {
         val jcode = studentJcode(joinedAt = now.minusHours(1))
         val closed = assignment(jcode.course, 60, now.minusDays(14), now.minusDays(1))
-        val access = CountingAccess(true)
+        assertEquals(emptyList<WorkspaceAssignmentMount>(), policy(listOf(closed), CountingAccess(true)).plan(jcode, now).assignments)
+    }
 
-        assertEquals(emptyList<WorkspaceAssignmentMount>(), policy(listOf(closed), access).plan(jcode, now).assignments)
-        assertEquals(0, access.calls)
+    @Test
+    fun `the closing time does not move when finalization completes`() {
+        // Joined after the deadline but before finalization completed.
+        val jcode = studentJcode(joinedAt = now.minusDays(1).plusSeconds(30))
+        val closed = assignment(jcode.course, 60, now.minusDays(14), now.minusDays(1))
+        val policy = policy(listOf(closed), CountingAccess(true))
+        assertEquals(emptyList<WorkspaceAssignmentMount>(), policy.plan(jcode, now).assignments)
+
+        closed.finalizedAt = now.minusDays(1).plusMinutes(1)
+        assertEquals(emptyList<WorkspaceAssignmentMount>(), policy.plan(jcode, now).assignments)
     }
 
     @Test
@@ -175,18 +228,8 @@ class ClosedAssignmentReadOnlyTest {
     }
 
     @Test
-    fun `portal list survives a Generator outage and assignment courses stay closed`() {
+    fun `assignment scoped courses keep closed assignments closed`() {
         val jcode = studentJcode()
-        val closed = assignment(jcode.course, 60, now.minusDays(14), now.minusDays(1))
-        val failing = WorkspaceAccessPolicy(
-            mock(AssignmentRepository::class.java),
-            ClosedAssignmentAccess { throw IllegalStateException("generator down") }
-        )
-        assertEquals(
-            mapOf(60L to StudentAssignmentAccess.NONE),
-            failing.studentAccess(listOf(closed), jcode.userCourse, now)
-        )
-
         val assignmentCourse = jcode.course.copy(workspaceScope = WorkspaceScope.ASSIGNMENT)
         val assignmentScoped = assignment(assignmentCourse, 61, now.minusDays(14), now.minusDays(1))
         val membership = jcode.userCourse.copy(course = assignmentCourse)
@@ -218,10 +261,59 @@ class ClosedAssignmentReadOnlyTest {
         reconciler(operationStore, accessPolicy, CountingAccess(true), bodies, """{"state":"READY"}""").reconcile()
 
         val payload = bodies.single()
+        verify(operationStore).markSucceeded(operation, mapOf("policyRevision" to plan.revision, "mountHash" to plan.mountHash))
         assertEquals(listOf("assignment-62"), payload["assignment_dirs"])
         assertEquals(listOf("assignment-60"), payload["read_only_assignment_dirs"])
         assertEquals(mapOf("assignment-60" to "hw1", "assignment-62" to "hw2"), payload["assignment_labels"])
         assertEquals(false, payload["read_only_workspace"])
+    }
+
+    @Test
+    fun `reconciler waits for a Generator that supports read-only mounts`() {
+        val jcode = studentJcode().also { it.lifecycleStatus = JcodeLifecycleStatus.READY }
+        val plan = WorkspaceAccessPlan(
+            revision = jcode.desiredRevision,
+            mountHash = "a".repeat(64),
+            assignments = listOf(WorkspaceAssignmentMount(60, "assignment-60", "hw1", readOnly = true)),
+            validUntil = null
+        )
+        val accessPolicy = mock(WorkspaceAccessPolicy::class.java) { invocation ->
+            if (invocation.method.name == "plan") plan else RETURNS_DEFAULTS.answer(invocation)
+        }
+        val operationStore = mock(WorkspaceOperationStore::class.java)
+        val operation = operation(WorkspaceOperationTarget.JCODE, jcode.id, WorkspaceOperationAction.RECONCILE_JCODE_ACCESS, jcode.desiredRevision)
+        `when`(operationStore.claimNext()).thenReturn(operation)
+        `when`(operationStore.loadJcode(jcode.id)).thenReturn(jcode)
+        val bodies = mutableListOf<Map<*, *>>()
+
+        reconciler(operationStore, accessPolicy, CountingAccess(true), bodies, """{"state":"READY"}""", generatorSupportsReadOnly = false)
+            .reconcile()
+
+        assertTrue(bodies.isEmpty())
+        verify(operationStore).defer(operation)
+    }
+
+    @Test
+    fun `portal and notices use the last known Generator answer without waiting`() {
+        val verifier = mock(GeneratorContractVerifier::class.java)
+        `when`(verifier.lastKnownSupport(ScheduledClosedAssignmentAccess.GENERATOR_FEATURE)).thenReturn(true)
+        `when`(verifier.supports(ScheduledClosedAssignmentAccess.GENERATOR_FEATURE)).thenThrow(IllegalStateException("busy"))
+        val access = ScheduledClosedAssignmentAccess(verifier, "2026-10-01T00:00:00", "")
+        assertTrue(access.readOnlyEnabledForDisplay(now))
+
+        val fresh = mock(GeneratorContractVerifier::class.java)
+        `when`(fresh.lastKnownSupport(ScheduledClosedAssignmentAccess.GENERATOR_FEATURE)).thenReturn(null)
+        `when`(fresh.supports(ScheduledClosedAssignmentAccess.GENERATOR_FEATURE)).thenThrow(IllegalStateException("down"))
+        val unreachable = ScheduledClosedAssignmentAccess(fresh, "2026-10-01T00:00:00", "")
+        assertFalse(unreachable.readOnlyEnabledForDisplay(now))
+        assertFalse(unreachable.readOnlyEnabledForDisplay(now))
+        org.mockito.Mockito.verify(fresh, org.mockito.Mockito.times(1)).supports(ScheduledClosedAssignmentAccess.GENERATOR_FEATURE)
+    }
+
+    @Test
+    fun `IDE warning times come from configuration`() {
+        assertEquals(listOf(15, 5, 2), WorkspaceNoticePublisher.parseLeadMinutes(" 2,15,5,5,0,99,x "))
+        org.junit.jupiter.api.assertThrows<IllegalArgumentException> { WorkspaceNoticePublisher.parseLeadMinutes("0,x") }
     }
 
     @Test
@@ -264,6 +356,8 @@ class ClosedAssignmentReadOnlyTest {
         assertEquals(listOf("KICKOFF", "DEADLINE"), transitions.map { (it as Map<*, *>)["kind"] })
         val deadlineNotice = transitions[1] as Map<*, *>
         assertEquals("Assignment 62", deadlineNotice["assignmentName"])
+        assertEquals(listOf(10, 5, 1), deadlineNotice["leadMinutes"])
+        assertEquals(listOf(1), (transitions[0] as Map<*, *>)["leadMinutes"])
         assertEquals(true, deadlineNotice["readOnlyAfter"])
         assertEquals(
             now.plusMinutes(10).atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli(),
@@ -319,8 +413,11 @@ class ClosedAssignmentReadOnlyTest {
         accessPolicy: WorkspaceAccessPolicy,
         access: ClosedAssignmentAccess,
         bodies: MutableList<Map<*, *>>,
-        response: String
+        response: String,
+        generatorSupportsReadOnly: Boolean = true
     ): WorkspaceReconciler {
+        val verifier = mock(GeneratorContractVerifier::class.java)
+        `when`(verifier.supports(ScheduledClosedAssignmentAccess.GENERATOR_FEATURE)).thenReturn(generatorSupportsReadOnly)
         val strategies = ExchangeStrategies.withDefaults()
         val webClient = WebClient.builder().exchangeFunction { request ->
             if (request.method().name() == "POST") {
@@ -343,7 +440,7 @@ class ClosedAssignmentReadOnlyTest {
         return WorkspaceReconciler(
             operationStore,
             accessPolicy,
-            mock(GeneratorContractVerifier::class.java),
+            verifier,
             access,
             webClient,
             1,
