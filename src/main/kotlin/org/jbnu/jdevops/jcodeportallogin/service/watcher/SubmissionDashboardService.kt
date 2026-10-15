@@ -47,7 +47,7 @@ class SubmissionDashboardService(
 
     private data class BulkDashboardRequest(
         @JsonProperty("student_ids") val studentIds: List<Int>,
-        // Activity after the deadline (e.g. runs inside a read-only closed assignment)
+        // Activity after finalization (e.g. runs inside a read-only closed assignment)
         // is not part of the submission. Older Watchers ignore this field.
         @JsonProperty("until") val until: String? = null
     )
@@ -116,7 +116,10 @@ class SubmissionDashboardService(
                 .bodyValue(
                     BulkDashboardRequest(
                         students.map { it.first },
-                        assignment.deadlineDate.atZone(ZoneId.of("Asia/Seoul")).toOffsetDateTime().toString()
+                        // Finalization copies the work after the read-only remount, so it marks
+                        // the actual end of submitted work, also for a professor's early close.
+                        // Until then nothing is cut off.
+                        assignment.finalizedAt?.atZone(ZoneId.systemDefault())?.toOffsetDateTime()?.toString()
                     )
                 )
                 .retrieve()
